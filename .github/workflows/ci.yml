@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        neovim_version: ['v0.9.5', 'v0.10.0', 'stable', 'nightly']
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: ${{ matrix.neovim_version }}
+
+      - name: Clone plenary.nvim
+        run: git clone --depth 1 https://github.com/nvim-lua/plenary.nvim /tmp/plenary.nvim
+
+      - name: Run tests
+        run: |
+          nvim --version
+          make test PLENARY_DIR=/tmp/plenary.nvim
+
+  docs:
+    name: Generate Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          neovim: true
+          version: stable
+
+      - name: Generate help tags
+        run: nvim --headless -c "helptags doc/" -c "qa"
+
+      - name: Check help tags generated
+        run: |
+          if [ -f doc/tags ]; then
+            echo "Help tags generated successfully"
+            cat doc/tags
+          else
+            echo "Warning: No help tags file generated"
+          fi
