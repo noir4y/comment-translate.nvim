@@ -19,7 +19,7 @@ function M.merge_lines(lines)
       table.insert(cleaned, trimmed)
     end
   end
-  return table.concat(cleaned, ' ')
+  return table.concat(cleaned, '\n')
 end
 
 ---@param text string
@@ -43,10 +43,10 @@ end
 ---@param text string
 ---@return string
 function M.url_encode(text)
-  text = text:gsub('\n', ' ')
-  text = text:gsub('([^%w%-%.%_%~])', function(c)
+  text = text:gsub('([^%w%-%.%_%~\n])', function(c)
     return string.format('%%%02X', string.byte(c))
   end)
+  text = text:gsub('\n', '%%0A')
   return text
 end
 
