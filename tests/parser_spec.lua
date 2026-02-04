@@ -369,10 +369,10 @@ describe('parser', function()
       assert.equals('Lua', result2)
     end)
 
-    it('should merge multiple lines', function()
+    it('should merge multiple lines with newlines', function()
       local lines = { '  first line  ', '  second line  ', '', '  third line  ' }
       local result = utils.merge_lines(lines)
-      assert.equals('first line second line third line', result)
+      assert.equals('first line\nsecond line\nthird line', result)
     end)
   end)
 end)

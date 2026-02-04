@@ -50,12 +50,26 @@ function M.show_inline(bufnr, line, translated_text)
   local line_content = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1] or ''
   local col = #line_content
 
-  local mark_id = vim.api.nvim_buf_set_extmark(bufnr, ns_id, line, col, {
-    virt_text = { { ' → ' .. translated_text, 'Comment' } },
-    virt_text_pos = 'eol',
+  local lines = vim.split(translated_text, '\n', { plain = true })
+  local opts = {
     hl_mode = 'combine',
-  })
-  
+  }
+
+  if #lines == 1 then
+    opts.virt_text = { { ' → ' .. lines[1], 'Comment' } }
+    opts.virt_text_pos = 'eol'
+  else
+    opts.virt_text = { { ' → ' .. lines[1], 'Comment' } }
+    opts.virt_text_pos = 'eol'
+    local virt_lines = {}
+    for i = 2, #lines do
+      table.insert(virt_lines, { { '   ' .. lines[i], 'Comment' } })
+    end
+    opts.virt_lines = virt_lines
+  end
+
+  local mark_id = vim.api.nvim_buf_set_extmark(bufnr, ns_id, line, col, opts)
+
   if not extmarks[bufnr] then
     extmarks[bufnr] = {}
   end
