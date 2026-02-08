@@ -22,7 +22,10 @@ local function load_modules()
   end)
 
   if not ok then
-    vim.notify('comment-translate: Failed to load modules - ' .. tostring(err), vim.log.levels.ERROR)
+    vim.notify(
+      'comment-translate: Failed to load modules - ' .. tostring(err),
+      vim.log.levels.ERROR
+    )
     return false
   end
 

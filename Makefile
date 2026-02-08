@@ -1,4 +1,4 @@
-.PHONY: test test-file clean
+.PHONY: test test-file clean fmt fmt-check
 
 # Test runner
 PLENARY_DIR ?= /tmp/plenary.nvim
@@ -31,3 +31,11 @@ docs:
 # Health check
 health:
 	nvim --headless -c "checkhealth comment-translate" -c "qa"
+
+# Format Lua files
+fmt:
+	stylua lua plugin tests
+
+# Check Lua formatting
+fmt-check:
+	stylua --check lua plugin tests

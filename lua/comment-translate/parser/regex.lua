@@ -26,9 +26,9 @@ local string_patterns = {
 
 -- Block comment delimiters: { start_pattern, end_pattern, start_literal, end_literal }
 local block_comment_delimiters = {
-  { '/%*', '%*/', '/*', '*/' },             -- C/C++/Java/JS/etc.
-  { '%-%-+%[%[', '%]%]', '--[[', ']]' },    -- Lua (]]-- or ]] both work)
-  { '<!%-%-', '%-%->', '<!--', '-->' },     -- HTML/XML
+  { '/%*', '%*/', '/*', '*/' }, -- C/C++/Java/JS/etc.
+  { '%-%-+%[%[', '%]%]', '--[[', ']]' }, -- Lua (]]-- or ]] both work)
+  { '<!%-%-', '%-%->', '<!--', '-->' }, -- HTML/XML
 }
 
 ---@param line_text string
@@ -45,7 +45,7 @@ local function check_block_start(line_text)
   for i, delim in ipairs(block_comment_delimiters) do
     local start_pattern = delim[1]
     local end_pattern = delim[2]
-    
+
     local start_pos = line_text:find(start_pattern)
     if start_pos then
       local end_pos = line_text:find(end_pattern, start_pos + 1)
@@ -67,7 +67,7 @@ local function check_block_end(line_text, delimiter_index)
   if not delim then
     return false, nil
   end
-  
+
   local end_pattern = delim[2]
   local end_pos = line_text:find(end_pattern)
   if end_pos then
@@ -88,18 +88,18 @@ function M.get_all_comments(bufnr)
   local comments = {}
   local line_count = vim.api.nvim_buf_line_count(bufnr)
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, line_count, false)
-  
+
   local in_block = false
   local block_delimiter_index = nil
   local block_start_line = nil
   local block_content_lines = {}
-  
+
   for line_idx = 0, line_count - 1 do
     local line_text = lines[line_idx + 1]
     if not line_text then
       goto continue
     end
-    
+
     if in_block then
       local is_end, content_before_end = check_block_end(line_text, block_delimiter_index)
       if is_end then
@@ -139,7 +139,7 @@ function M.get_all_comments(bufnr)
             break
           end
         end
-        
+
         if not comment then
           for _, pattern in ipairs(inline_comment_patterns) do
             comment = line_text:match(pattern)
@@ -148,16 +148,16 @@ function M.get_all_comments(bufnr)
             end
           end
         end
-        
+
         if comment then
           comments[line_idx] = comment
         end
       end
     end
-    
+
     ::continue::
   end
-  
+
   return comments
 end
 
@@ -199,7 +199,7 @@ function M.get_string_at_position(bufnr, line, col)
   if not config.config.targets.string then
     return nil
   end
-  
+
   local line_text = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
   if not line_text then
     return nil
@@ -222,7 +222,7 @@ function M.get_string_at_position(bufnr, line, col)
       search_start = e + 1
     end
   end
-  
+
   return nil
 end
 

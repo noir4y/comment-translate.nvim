@@ -81,7 +81,10 @@ M.config = vim.deepcopy(default_config)
 local function warn_unknown(prefix, tbl, allowed)
   for key, _ in pairs(tbl) do
     if not allowed[key] then
-      vim.notify(string.format('comment-translate: unknown config key %s.%s', prefix, key), vim.log.levels.WARN)
+      vim.notify(
+        string.format('comment-translate: unknown config key %s.%s', prefix, key),
+        vim.log.levels.WARN
+      )
     end
   end
 end
@@ -126,7 +129,10 @@ local function validate(user_config)
     })
     -- Ensure max_entries is at least 1 to prevent infinite loops
     if user_config.cache.max_entries and user_config.cache.max_entries < 1 then
-      vim.notify('comment-translate: cache.max_entries must be >= 1, defaulting to 1', vim.log.levels.WARN)
+      vim.notify(
+        'comment-translate: cache.max_entries must be >= 1, defaulting to 1',
+        vim.log.levels.WARN
+      )
       user_config.cache.max_entries = 1
     end
   end
