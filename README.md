@@ -161,6 +161,22 @@ hover = { auto = false }
 
 ⚠️ Any text you translate (hover, replace, or immersive translation) is sent to the configured external translation service.
 
+## Development
+
+Use [StyLua](https://github.com/JohnnyMorganz/StyLua) for Lua formatting.
+
+* Format all Lua files:
+
+```sh
+make fmt
+```
+
+* Check formatting (used in CI):
+
+```sh
+make fmt-check
+```
+
 ## License
 
 MIT

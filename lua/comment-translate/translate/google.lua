@@ -64,16 +64,19 @@ function M.translate(text, target_lang, source_lang, callback)
   local ok, Job = get_plenary_job()
   if not ok then
     vim.schedule(function()
-      vim.notify('comment-translate: plenary.nvim is required for translation', vim.log.levels.ERROR)
+      vim.notify(
+        'comment-translate: plenary.nvim is required for translation',
+        vim.log.levels.ERROR
+      )
       callback(nil)
     end)
     return
   end
-  
+
   source_lang = source_lang or 'auto'
   target_lang = utils.normalize_lang_code(target_lang)
   source_lang = utils.normalize_lang_code(source_lang)
-  
+
   local encoded_text = utils.url_encode(text)
   local url = string.format(
     'https://translate.googleapis.com/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t&q=%s',
@@ -81,7 +84,7 @@ function M.translate(text, target_lang, source_lang, callback)
     target_lang,
     encoded_text
   )
-  
+
   local stderr_output = {}
 
   Job:new({
@@ -90,7 +93,8 @@ function M.translate(text, target_lang, source_lang, callback)
       '--silent',
       '--show-error',
       '--fail',
-      '--max-time', '10',
+      '--max-time',
+      '10',
       url,
     },
     on_stderr = function(_, data)
@@ -109,20 +113,20 @@ function M.translate(text, target_lang, source_lang, callback)
           callback(nil)
           return
         end
-        
+
         local result = table.concat(j:result(), '')
         if not result or result == '' then
           callback(nil)
           return
         end
-        
+
         local parse_ok, json = pcall(vim.fn.json_decode, result)
         if not parse_ok or not json then
           vim.notify('comment-translate: Failed to parse translation response', vim.log.levels.WARN)
           callback(nil)
           return
         end
-        
+
         local translated_text = ''
         if json[1] and type(json[1]) == 'table' then
           for _, item in ipairs(json[1]) do
@@ -131,12 +135,12 @@ function M.translate(text, target_lang, source_lang, callback)
             end
           end
         end
-        
+
         if translated_text == '' then
           callback(nil)
           return
         end
-        
+
         cache.set(text, translated_text, target_lang, source_lang)
         callback(translated_text)
       end)

@@ -22,7 +22,6 @@ local string_node_types = {
 ---@param col number
 ---@return string?, string?
 function M.get_text_at_position(bufnr, row, col)
-
   local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
   if not ok or not parser then
     return nil, nil
@@ -72,8 +71,10 @@ function M.get_text_at_position(bufnr, row, col)
           break
         end
       end
-      if is_comment then break end
-      
+      if is_comment then
+        break
+      end
+
       for _, type_name in ipairs(string_node_types) do
         if parent_type == type_name then
           is_string = true
@@ -81,7 +82,9 @@ function M.get_text_at_position(bufnr, row, col)
           break
         end
       end
-      if is_string then break end
+      if is_string then
+        break
+      end
 
       parent = parent:parent()
     end
@@ -110,24 +113,24 @@ function M.get_all_comments(bufnr)
   if not config.config.targets.comment then
     return {}
   end
-  
+
   local comments = {}
-  
+
   local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
   if not ok or not parser then
     return {}
   end
-  
+
   local tree = parser:parse()[1]
   if not tree then
     return {}
   end
-  
+
   local root = tree:root()
-  
+
   local function traverse(node)
     local node_type = node:type()
-    
+
     for _, type_name in ipairs(comment_node_types) do
       if node_type == type_name then
         local text = vim.treesitter.get_node_text(node, bufnr)
@@ -138,14 +141,14 @@ function M.get_all_comments(bufnr)
         return
       end
     end
-    
+
     for child in node:iter_children() do
       traverse(child)
     end
   end
-  
+
   traverse(root)
-  
+
   return comments
 end
 

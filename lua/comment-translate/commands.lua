@@ -77,7 +77,7 @@ function M.hover_translate()
     vim.notify('No comment or string found', vim.log.levels.INFO)
     return
   end
-  
+
   translate.translate(text, nil, nil, function(result)
     if result then
       ui.hover.show(result)

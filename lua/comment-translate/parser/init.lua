@@ -71,7 +71,7 @@ function M.get_text_at_cursor(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   row = row - 1
-  
+
   local text, node_type = treesitter.get_text_at_position(bufnr, row, col)
   if text then
     local cleaned = normalize_text(text, node_type)
