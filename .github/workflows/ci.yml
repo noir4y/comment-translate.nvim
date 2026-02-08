@@ -17,6 +17,8 @@ jobs:
         uses: JohnnyMorganz/stylua-action@v4
         with:
           version: latest
+          token: ${{ github.token }}
+          args: false
 
       - name: Check formatting
         run: make fmt-check
