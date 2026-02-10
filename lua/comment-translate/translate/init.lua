@@ -2,6 +2,7 @@ local M = {}
 
 M.SERVICES = {
   google = 'google',
+  llm = 'llm',
 }
 
 ---@param service_name? string
@@ -13,6 +14,8 @@ local function get_service(service_name)
 
   if service_name == M.SERVICES.google then
     return require('comment-translate.translate.google'), nil
+  elseif service_name == M.SERVICES.llm then
+    return require('comment-translate.translate.llm'), nil
   else
     return nil, 'Unknown translate service: ' .. tostring(service_name)
   end
@@ -47,7 +50,7 @@ end
 
 ---@return string[]
 function M.get_available_services()
-  return { M.SERVICES.google }
+  return { M.SERVICES.google, M.SERVICES.llm }
 end
 
 return M

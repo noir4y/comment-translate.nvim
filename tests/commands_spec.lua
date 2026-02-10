@@ -16,6 +16,7 @@ describe('commands', function()
     package.loaded['comment-translate.translate'] = nil
     package.loaded['comment-translate.translate.cache'] = nil
     package.loaded['comment-translate.translate.google'] = nil
+    package.loaded['comment-translate.translate.llm'] = nil
     package.loaded['comment-translate.ui'] = nil
     package.loaded['comment-translate.ui.hover'] = nil
     package.loaded['comment-translate.ui.virtual_text'] = nil
@@ -288,6 +289,7 @@ describe('immersive multi-buffer behavior', function()
     package.loaded['comment-translate.translate'] = nil
     package.loaded['comment-translate.translate.cache'] = nil
     package.loaded['comment-translate.translate.google'] = nil
+    package.loaded['comment-translate.translate.llm'] = nil
     package.loaded['comment-translate.ui'] = nil
     package.loaded['comment-translate.ui.hover'] = nil
     package.loaded['comment-translate.ui.virtual_text'] = nil

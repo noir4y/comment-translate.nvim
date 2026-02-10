@@ -6,6 +6,7 @@
 ---@field cache CommentTranslateCacheConfig
 ---@field max_length number
 ---@field targets CommentTranslateTargetsConfig
+---@field llm CommentTranslateLLMConfig
 
 ---@class CommentTranslateHoverConfig
 ---@field enabled boolean
@@ -23,6 +24,14 @@
 ---@field comment boolean
 ---@field string boolean
 
+---@class CommentTranslateLLMConfig
+---@field provider string
+---@field api_key string?
+---@field model string
+---@field endpoint string?
+---@field system_prompt string?
+---@field timeout number
+
 ---@class CommentTranslateKeymapsConfig
 ---@field hover? string|false
 ---@field hover_manual? string|false Keymap for manual hover when auto-hover is disabled
@@ -30,6 +39,16 @@
 ---@field toggle? string|false
 
 local M = {}
+local SUPPORTED_SERVICES = {
+  google = true,
+  llm = true,
+}
+local SUPPORTED_LLM_PROVIDERS = {
+  openai = true,
+  anthropic = true,
+  gemini = true,
+  ollama = true,
+}
 
 ---@return string
 local function get_default_language()
@@ -67,6 +86,14 @@ local default_config = {
     comment = true,
     string = true,
   },
+  llm = {
+    provider = 'openai',
+    api_key = nil,
+    model = 'gpt-5.2',
+    endpoint = nil,
+    system_prompt = nil,
+    timeout = 20,
+  },
   keymaps = {
     hover = '<leader>th',
     hover_manual = '<leader>tc',
@@ -102,8 +129,20 @@ local function validate(user_config)
     cache = { user_config.cache, 'table', true },
     max_length = { user_config.max_length, 'number', true },
     targets = { user_config.targets, 'table', true },
+    llm = { user_config.llm, 'table', true },
     keymaps = { user_config.keymaps, 'table', true },
   })
+
+  if user_config.translate_service and not SUPPORTED_SERVICES[user_config.translate_service] then
+    vim.notify(
+      string.format(
+        "comment-translate: unsupported translate_service '%s', defaulting to 'google'",
+        tostring(user_config.translate_service)
+      ),
+      vim.log.levels.WARN
+    )
+    user_config.translate_service = 'google'
+  end
 
   if user_config.hover then
     warn_unknown('hover', user_config.hover, { enabled = true, delay = true, auto = true })
@@ -143,6 +182,44 @@ local function validate(user_config)
       ['targets.comment'] = { user_config.targets.comment, 'boolean', true },
       ['targets.string'] = { user_config.targets.string, 'boolean', true },
     })
+  end
+
+  if user_config.llm then
+    warn_unknown('llm', user_config.llm, {
+      provider = true,
+      api_key = true,
+      model = true,
+      endpoint = true,
+      system_prompt = true,
+      timeout = true,
+    })
+    vim.validate({
+      ['llm.provider'] = { user_config.llm.provider, 'string', true },
+      ['llm.api_key'] = { user_config.llm.api_key, 'string', true },
+      ['llm.model'] = { user_config.llm.model, 'string', true },
+      ['llm.endpoint'] = { user_config.llm.endpoint, 'string', true },
+      ['llm.system_prompt'] = { user_config.llm.system_prompt, 'string', true },
+      ['llm.timeout'] = { user_config.llm.timeout, 'number', true },
+    })
+
+    if user_config.llm.provider and not SUPPORTED_LLM_PROVIDERS[user_config.llm.provider] then
+      vim.notify(
+        string.format(
+          "comment-translate: unsupported llm.provider '%s', defaulting to 'openai'",
+          tostring(user_config.llm.provider)
+        ),
+        vim.log.levels.WARN
+      )
+      user_config.llm.provider = 'openai'
+    end
+
+    if user_config.llm.timeout and user_config.llm.timeout <= 0 then
+      vim.notify(
+        'comment-translate: llm.timeout must be > 0, defaulting to 20',
+        vim.log.levels.WARN
+      )
+      user_config.llm.timeout = 20
+    end
   end
 
   if user_config.keymaps then

@@ -91,7 +91,7 @@ use {
 ```lua
 require('comment-translate').setup({
   target_language = 'ja',  -- Target language (default: auto-detected from system locale, fallback 'en')
-  translate_service = 'google',  -- Currently only 'google' is supported
+  translate_service = 'google',  -- 'google' or 'llm'
   hover = {
     enabled = true,  -- Enable hover translation
     delay = 500,  -- Additional delay (ms) after CursorHold before showing hover
@@ -109,6 +109,14 @@ require('comment-translate').setup({
     comment = true,  -- Include comments as translation targets
     string = true,  -- Include strings as translation targets
   },
+  llm = {
+    provider = 'openai',  -- 'openai' | 'anthropic' | 'gemini' | 'ollama'
+    api_key = nil,  -- Required except provider='ollama' (can also use provider-specific env vars)
+    model = 'gpt-5.2',
+    endpoint = nil,  -- Optional custom endpoint (default depends on provider)
+    system_prompt = nil,  -- Optional custom system prompt
+    timeout = 20,  -- curl max-time in seconds
+  },
   keymaps = {
     hover = '<leader>th',  -- Hover translation
     hover_manual = '<leader>tc',  -- Manual hover trigger (when auto is disabled)
@@ -122,6 +130,52 @@ require('comment-translate').setup({
 
 * **target_language**: Automatically detected from system locale (`LANG`, `LANGUAGE`, `LC_ALL`) or Vim language settings. Falls back to `'en'` if detection fails.
 * **hover.delay**: Applied after the `CursorHold` event. Total delay is `updatetime` (Neovim option) plus `hover.delay`.
+* **translate_service = 'llm'**: Supports `openai`, `anthropic`, `gemini`, and `ollama`.
+* **API key env vars**:
+  * `openai`: `OPENAI_API_KEY`
+  * `anthropic`: `ANTHROPIC_API_KEY`
+  * `gemini`: `GEMINI_API_KEY`
+  * `ollama`: API key not required
+
+### LLM Translation Example
+
+```lua
+require('comment-translate').setup({
+  translate_service = 'llm',
+  target_language = 'ja',
+  llm = {
+    provider = 'openai',
+    api_key = vim.env.OPENAI_API_KEY, -- or a literal key string
+    model = 'gpt-5.2',
+  },
+})
+```
+
+### Provider Examples
+
+```lua
+-- Anthropic
+llm = {
+  provider = 'anthropic',
+  model = 'claude-sonnet-4-0',
+  api_key = vim.env.ANTHROPIC_API_KEY,
+}
+
+-- Gemini
+llm = {
+  provider = 'gemini',
+  model = 'gemini-2.5-flash',
+  api_key = vim.env.GEMINI_API_KEY,
+}
+
+-- Ollama (local)
+llm = {
+  provider = 'ollama',
+  model = 'translategemma:4b',
+  endpoint = 'http://localhost:11434/api/chat', -- optional (default shown)
+}
+
+```
 
 ## Commands
 
@@ -137,7 +191,7 @@ require('comment-translate').setup({
 
 This plugin prioritizes transparency. To provide real-time translation, text is sent to an external translation service.
 
-* **External transmission**: Translation uses the unofficial Google Translate HTTP endpoint (`translate.googleapis.com`) via `curl`.
+* **External transmission**: Translation sends text to the configured external service (`google` or `llm`) via `curl`.
 * **What is sent**: The selected text or detected comment/string content. If it contains **personal data**, **credentials**, **internal code**, or other sensitive information, it may be transmitted outside your environment.
 * **Cache behavior**: The built-in cache is **in-memory only**. No files are written by the plugin, and the cache is cleared when Neovim exits.
 * **Control**: Automatic hover translation can be disabled, and all translation features are user-controlled.
@@ -175,6 +229,12 @@ make fmt
 
 ```sh
 make fmt-check
+```
+
+* Run tests:
+
+```sh
+make test
 ```
 
 ## License

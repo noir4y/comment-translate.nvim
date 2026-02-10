@@ -2,6 +2,7 @@
 ---Run with :checkhealth comment-translate
 
 local M = {}
+local utils = require('comment-translate.utils')
 
 ---@param module_name string
 ---@return boolean
@@ -64,6 +65,40 @@ function M.check()
       vim.health.ok('Plugin is configured')
       vim.health.info('Target language: ' .. (config.config.target_language or 'not set'))
       vim.health.info('Translate service: ' .. (config.config.translate_service or 'not set'))
+
+      if config.config.translate_service == 'llm' then
+        local provider = (config.config.llm and config.config.llm.provider) or 'openai'
+        vim.health.info('LLM provider: ' .. provider)
+
+        if provider == 'ollama' then
+          vim.health.ok('LLM API key is not required for ollama provider')
+        else
+          local env_keys = {
+            openai = { 'OPENAI_API_KEY' },
+            anthropic = { 'ANTHROPIC_API_KEY' },
+            gemini = { 'GEMINI_API_KEY' },
+          }
+          local configured = config.config.llm and config.config.llm.api_key
+          local has_key = configured and utils.trim(configured) ~= ''
+          if not has_key then
+            for _, env_name in ipairs(env_keys[provider] or {}) do
+              local value = vim.env[env_name]
+              if value and utils.trim(value) ~= '' then
+                has_key = true
+                break
+              end
+            end
+          end
+
+          if has_key then
+            vim.health.ok('LLM API key is configured')
+          else
+            vim.health.error('LLM API key is missing', {
+              'Set `llm.api_key` in setup() or required env var for provider',
+            })
+          end
+        end
+      end
     else
       vim.health.warn('Plugin setup() has not been called', {
         "Call require('comment-translate').setup({}) in your config",
