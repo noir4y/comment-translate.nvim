@@ -14,17 +14,17 @@ REQUIREMENTS                                    *comment-translate-requirements*
 - nvim-treesitter (recommended)
 - curl command (for translation API)
 - Internet connection
-- Translation uses the unofficial Google Translate HTTP endpoint via curl.
-  Network policy changes (proxy/firewall) or upstream API changes may break
-  translation; inform users in restricted environments.
+- Translation uses the configured external service (`google` or `llm`) via
+  curl. Network policy changes (proxy/firewall) or upstream API changes may
+  break translation; inform users in restricted environments.
 
 PRIVACY / DATA HANDLING                          *comment-translate-privacy*
 
 {comment-translate.nvim} sends the text you translate (comments, strings, or
 visual selections) to an external translation service over the network.
 
-- External transmission: Translation uses the unofficial Google Translate HTTP
-  endpoint (translate.googleapis.com) via curl.
+- External transmission: Translation sends text to the configured external
+  service (`google` or `llm`) via curl.
 - What is sent: The target text content itself. If it contains personal data,
   credentials, internal code, or other sensitive information, it may be sent
   outside your environment.
@@ -106,8 +106,38 @@ Options:
     Default: System locale or 'en'
 
 *comment-translate.translate_service*
-    Translation service to use: currently only 'google' is available.
+    Translation service to use: 'google' or 'llm'.
     Default: 'google'
+
+*comment-translate.llm.provider*
+    LLM provider when translate_service = 'llm'.
+    Supported: 'openai', 'anthropic', 'gemini', 'ollama'
+    Default: 'openai'
+
+*comment-translate.llm.api_key*
+    API key for LLM translation service.
+    Required for all providers except 'ollama'.
+    Environment variable fallback:
+      - openai: OPENAI_API_KEY
+      - anthropic: ANTHROPIC_API_KEY
+      - gemini: GEMINI_API_KEY
+    Default: nil
+
+*comment-translate.llm.model*
+    Model name for LLM translation.
+    Default: 'gpt-5.2'
+
+*comment-translate.llm.endpoint*
+    Optional endpoint override. If nil, provider-specific defaults are used.
+    Default: nil
+
+*comment-translate.llm.system_prompt*
+    Optional system prompt for translation behavior.
+    Default: nil (plugin uses internal prompt)
+
+*comment-translate.llm.timeout*
+    HTTP timeout (seconds) used by curl for LLM translation requests.
+    Default: 20
 
 *comment-translate.hover.enabled*
     Enable automatic hover translation.
