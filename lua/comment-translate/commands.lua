@@ -181,7 +181,7 @@ end
 local function disable_all_buffers()
   ui.virtual_text.clear_all()
 
-  for buf, state in pairs(immersive_state) do
+  for _, state in pairs(immersive_state) do
     state.enabled = false
     bump_token(state)
   end

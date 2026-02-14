@@ -23,6 +23,26 @@ jobs:
       - name: Check formatting
         run: make fmt-check
 
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Lua and LuaRocks
+        uses: leafo/gh-actions-lua@v11
+        with:
+          luaVersion: "5.1"
+
+      - name: Setup LuaRocks
+        uses: leafo/gh-actions-luarocks@v5
+
+      - name: Install luacheck
+        run: luarocks install luacheck
+
+      - name: Run lint
+        run: make lint
+
   test:
     name: Test
     runs-on: ubuntu-latest

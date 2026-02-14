@@ -291,7 +291,6 @@ describe('integration', function()
 
   describe('manual hover mode', function()
     local config
-    local commands
 
     before_each(function()
       for name, _ in pairs(package.loaded) do
@@ -312,7 +311,7 @@ describe('integration', function()
         },
       })
 
-      commands = require('comment-translate.commands')
+      require('comment-translate.commands')
     end)
 
     it('should have auto hover disabled in config', function()
