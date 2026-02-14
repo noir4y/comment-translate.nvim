@@ -1,5 +1,7 @@
 ---Minimal init for running tests
----Usage: nvim --headless -u tests/minimal_init.lua -c "PlenaryBustedDirectory tests/ {minimal_init = 'tests/minimal_init.lua'}"
+---Usage:
+---nvim --headless -u tests/minimal_init.lua
+---Then run PlenaryBustedDirectory with this minimal_init.
 
 local plenary_dir = os.getenv('PLENARY_DIR') or '/tmp/plenary.nvim'
 local is_not_a_directory = vim.fn.isdirectory(plenary_dir) == 0

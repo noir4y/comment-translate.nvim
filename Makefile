@@ -1,4 +1,4 @@
-.PHONY: test test-file clean fmt fmt-check
+.PHONY: test test-file clean fmt fmt-check lint
 
 # Test runner
 PLENARY_DIR ?= /tmp/plenary.nvim
@@ -39,3 +39,7 @@ fmt:
 # Check Lua formatting
 fmt-check:
 	stylua --check lua plugin tests
+
+# Lint Lua files
+lint:
+	luacheck lua plugin tests

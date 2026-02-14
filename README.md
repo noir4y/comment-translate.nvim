@@ -231,6 +231,12 @@ make fmt
 make fmt-check
 ```
 
+* Run lint:
+
+```sh
+make lint
+```
+
 * Run tests:
 
 ```sh

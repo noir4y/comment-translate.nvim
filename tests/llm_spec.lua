@@ -33,7 +33,7 @@ describe('translate.llm', function()
     }
 
     local FakeJob = {}
-    function FakeJob:new(opts)
+    function FakeJob.new(_, opts)
       job_state.new_calls = job_state.new_calls + 1
       job_state.last_opts = opts
       return setmetatable({
@@ -43,11 +43,11 @@ describe('translate.llm', function()
           result = function()
             return { job_state.stdout }
           end,
-          start = function(self)
+          start = function(job)
             for _, line in ipairs(job_state.stderr_lines or {}) do
-              self._opts.on_stderr(nil, line)
+              job._opts.on_stderr(nil, line)
             end
-            self._opts.on_exit(self, job_state.exit_code)
+            job._opts.on_exit(job, job_state.exit_code)
           end,
         },
       })
