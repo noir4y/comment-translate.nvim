@@ -1,54 +1,48 @@
 # comment-translate.nvim
 
-Translate comments and strings in code to understand multilingual codebases without leaving Neovim.
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Neovim](https://img.shields.io/badge/Neovim-%3E=0.8-blue)](https://neovim.io)
 
-## Features
+Translate comments and strings directly in Neovim.
+Use either classic translation APIs or LLM backends, including fully local models via Ollama.
 
 ![Hover translation demo](assets/demo.gif)
-* **Hover Translation**: Display translations when hovering over comments or strings
-* **Immersive Translation**: Automatically translate and display comments inline in the buffer
-* **Replace Translation**: Replace selected text with its translation
-* **Tree-sitter aware**: Accurate detection of comments and strings
 
-## Quick Start
+## Why This Plugin
 
-1. Install the plugin using your preferred plugin manager.
-2. Open a file containing comments or strings.
-3. Hover over a comment or string to see the translation.
+Many translation plugins rely on external services only. `comment-translate.nvim` is designed for teams and individuals who want a practical choice:
 
-## Usage
+- Use hosted providers when you want quality and speed.
+- Use local LLMs when you need stronger privacy and control.
+- Keep your translation workflow inside Neovim.
 
-### Hover Translation
+## Key Benefits
 
-When you hover over a comment or string, the translation appears in a popup.
+- LLM translation support (`openai`, `anthropic`, `gemini`, `ollama`)
+- Local LLM workflow via Ollama (no source text sent to cloud APIs)
+- Hover translation for quick understanding
+- Immersive inline translation mode
+- Replace selected text with translation
+- Tree-sitter aware comment/string detection
 
-**Timing**: The popup appears after `updatetime` (default 4000ms) plus `hover.delay`.
+## Security and Privacy
 
-```lua
-vim.opt.updatetime = 300
+This plugin gives you control over where your text goes:
 
-require('comment-translate').setup({
-  hover = { delay = 200 },
-})
-```
+- `translate_service = 'google'` or hosted `llm` providers: text is sent to the configured remote service.
+- `llm.provider = 'ollama'` with the default local endpoint keeps translation local; if `llm.endpoint` is set to a remote host, text is sent there.
+- Cache is in-memory only and is not persisted to disk by this plugin.
 
-### Immersive Translation
-
-Run `:CommentTranslateToggle` to translate and display all comments inline.
-
-Immersive mode is **global** and applies to all buffers until disabled.
-
-### Replace Selected Text
-
-Select text in visual mode and run `:CommentTranslateReplace` to replace it with the translation.
+For sensitive repositories, local Ollama models are the recommended setup.
 
 ## Requirements
 
-* Neovim 0.8+
-* [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) (required)
-* [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) (recommended)
-* `curl` command
-* Internet connection
+- Neovim 0.8+
+- `curl`
+- [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) (required)
+- [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) (recommended)
+
+Note: Internet is not required when you use local translation only (for example, Ollama running locally).
 
 ## Installation
 
@@ -62,9 +56,7 @@ Select text in visual mode and run `:CommentTranslateReplace` to replace it with
     'nvim-treesitter/nvim-treesitter',
   },
   config = function()
-    require('comment-translate').setup({
-      target_language = 'ja',
-    })
+    require('comment-translate').setup({})
   end,
 }
 ```
@@ -79,169 +71,118 @@ use {
     'nvim-treesitter/nvim-treesitter',
   },
   config = function()
-    require('comment-translate').setup({
-      target_language = 'ja',
-    })
+    require('comment-translate').setup({})
   end,
 }
+```
+
+## Usage
+
+### Hover Translation
+
+```lua
+vim.keymap.set('n', '<leader>th', '<cmd>CommentTranslateHover<CR>', { silent = true })
+```
+
+### Immersive Translation
+
+```vim
+:CommentTranslateToggle
+```
+
+### Replace Selected Text
+
+```vim
+:CommentTranslateReplace
 ```
 
 ## Configuration
 
 ```lua
 require('comment-translate').setup({
-  target_language = 'ja',  -- Target language (default: auto-detected from system locale, fallback 'en')
-  translate_service = 'google',  -- 'google' or 'llm'
+  target_language = 'ja',
+  translate_service = 'google', -- 'google' or 'llm'
+
   hover = {
-    enabled = true,  -- Enable hover translation
-    delay = 500,  -- Additional delay (ms) after CursorHold before showing hover
-    auto = true,  -- If false, disable auto-hover and use explicit keymap
+    enabled = true,
+    delay = 500,
+    auto = true,
   },
+
   immersive = {
-    enabled = false,  -- Enable immersive translation on startup
+    enabled = false,
   },
+
   cache = {
-    enabled = true,  -- Enable translation cache
-    max_entries = 1000,  -- Maximum cache entries
+    enabled = true,
+    max_entries = 1000,
   },
-  max_length = 5000,  -- Maximum translation text length
+
   targets = {
-    comment = true,  -- Include comments as translation targets
-    string = true,  -- Include strings as translation targets
+    comment = true,
+    string = true,
   },
+
   llm = {
-    provider = 'openai',  -- 'openai' | 'anthropic' | 'gemini' | 'ollama'
-    api_key = nil,  -- Required except provider='ollama' (can also use provider-specific env vars)
-    model = 'gpt-5.2',
-    endpoint = nil,  -- Optional custom endpoint (default depends on provider)
-    system_prompt = nil,  -- Optional custom system prompt
-    timeout = 20,  -- curl max-time in seconds
+    provider = 'ollama', -- 'openai' | 'anthropic' | 'gemini' | 'ollama'
+    model = 'translategemma:4b',
+    api_key = nil, -- not required for ollama
+    timeout = 20,
+    endpoint = 'http://localhost:11434/api/chat', -- optional
   },
+
   keymaps = {
-    hover = '<leader>th',  -- Hover translation
-    hover_manual = '<leader>tc',  -- Manual hover trigger (when auto is disabled)
-    replace = '<leader>tr',  -- Replace selected text with translation
-    toggle = '<leader>tt',  -- Toggle immersive translation ON/OFF (global)
+    hover = '<leader>th',
+    hover_manual = '<leader>tc',
+    replace = '<leader>tr',
+    toggle = '<leader>tt',
   },
 })
 ```
 
-### Configuration Notes
+## LLM Provider Examples
 
-* **target_language**: Automatically detected from system locale (`LANG`, `LANGUAGE`, `LC_ALL`) or Vim language settings. Falls back to `'en'` if detection fails.
-* **hover.delay**: Applied after the `CursorHold` event. Total delay is `updatetime` (Neovim option) plus `hover.delay`.
-* **translate_service = 'llm'**: Supports `openai`, `anthropic`, `gemini`, and `ollama`.
-* **API key env vars**:
-  * `openai`: `OPENAI_API_KEY`
-  * `anthropic`: `ANTHROPIC_API_KEY`
-  * `gemini`: `GEMINI_API_KEY`
-  * `ollama`: API key not required
-
-### LLM Translation Example
+### Local (Ollama)
 
 ```lua
 require('comment-translate').setup({
   translate_service = 'llm',
-  target_language = 'ja',
+  llm = {
+    provider = 'ollama',
+    model = 'translategemma:4b',
+  },
+})
+```
+
+### Hosted (OpenAI)
+
+```lua
+require('comment-translate').setup({
+  translate_service = 'llm',
   llm = {
     provider = 'openai',
-    api_key = vim.env.OPENAI_API_KEY, -- or a literal key string
+    api_key = vim.env.OPENAI_API_KEY,
     model = 'gpt-5.2',
   },
 })
 ```
 
-### Provider Examples
-
-```lua
--- Anthropic
-llm = {
-  provider = 'anthropic',
-  model = 'claude-sonnet-4-0',
-  api_key = vim.env.ANTHROPIC_API_KEY,
-}
-
--- Gemini
-llm = {
-  provider = 'gemini',
-  model = 'gemini-2.5-flash',
-  api_key = vim.env.GEMINI_API_KEY,
-}
-
--- Ollama (local)
-llm = {
-  provider = 'ollama',
-  model = 'translategemma:4b',
-  endpoint = 'http://localhost:11434/api/chat', -- optional (default shown)
-}
-
-```
-
 ## Commands
 
-* `:CommentTranslateHover` — Display translation under cursor
-* `:CommentTranslateHoverToggle` — Toggle auto hover on/off
-* `:CommentTranslateReplace` — Replace selected text with translation
-* `:CommentTranslateToggle` — Toggle immersive translation globally
-* `:CommentTranslateUpdate` — Update immersive translation for current buffer
-* `:CommentTranslateSetup` — Setup plugin with default settings
-* `:CommentTranslateHealth` — Health check (`:checkhealth comment-translate`)
-
-## Privacy / Data Handling
-
-This plugin prioritizes transparency. To provide real-time translation, text is sent to an external translation service.
-
-* **External transmission**: Translation sends text to the configured external service (`google` or `llm`) via `curl`.
-* **What is sent**: The selected text or detected comment/string content. If it contains **personal data**, **credentials**, **internal code**, or other sensitive information, it may be transmitted outside your environment.
-* **Cache behavior**: The built-in cache is **in-memory only**. No files are written by the plugin, and the cache is cleared when Neovim exits.
-* **Control**: Automatic hover translation can be disabled, and all translation features are user-controlled.
-
-### Confidential environments (recommended)
-
-If you work in an environment with strict security or compliance requirements:
-
-* Disable automatic hover translation:
-
-```lua
-hover = { auto = false }
-```
-
-* Use manual translation commands only when explicitly needed.
-* You can immediately stop automatic hover at runtime with:
-
-```
-:CommentTranslateHoverToggle
-```
-
-⚠️ Any text you translate (hover, replace, or immersive translation) is sent to the configured external translation service.
+- `:CommentTranslateHover`       — Display translation under cursor
+- `:CommentTranslateHoverToggle` — Toggle auto hover on/off
+- `:CommentTranslateReplace`     — Replace selected text with translation
+- `:CommentTranslateToggle`      — Toggle immersive translation globally
+- `:CommentTranslateUpdate`      — Update immersive translation for current buffer
+- `:CommentTranslateSetup`       — Setup plugin with default settings
+- `:CommentTranslateHealth`      — Health check (:checkhealth comment-translate)
 
 ## Development
 
-Use [StyLua](https://github.com/JohnnyMorganz/StyLua) for Lua formatting.
-
-* Format all Lua files:
-
-```sh
-make fmt
-```
-
-* Check formatting (used in CI):
-
-```sh
-make fmt-check
-```
-
-* Run lint:
-
-```sh
-make lint
-```
-
-* Run tests:
-
-```sh
-make test
-```
+- Format: `make fmt`
+- Format check: `make fmt-check`
+- Lint: `make lint`
+- Test: `make test`
 
 ## License
 
