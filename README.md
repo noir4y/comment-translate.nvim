@@ -3,8 +3,8 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Neovim](https://img.shields.io/badge/Neovim-%3E=0.8-blue)](https://neovim.io)
 
-Translate comments and strings directly in Neovim.
-Use either classic translation APIs or LLM backends, including fully local models via Ollama.
+Translate comments and strings directly in Neovim using hover or immersive inline views.
+Supports classic translation APIs as well as LLM backends, including fully local models via Ollama.
 
 ![Hover translation demo](assets/demo.gif)
 
