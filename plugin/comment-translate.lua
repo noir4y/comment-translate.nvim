@@ -22,8 +22,9 @@ end, {
 })
 
 vim.api.nvim_create_user_command('CommentTranslateHealth', function()
+  require('comment-translate.health').set_target_bufnr(vim.api.nvim_get_current_buf())
   vim.cmd('checkhealth comment-translate')
 end, {
-  desc = 'Check comment-translate.nvim health (alias for :checkhealth comment-translate)',
+  desc = 'Check comment-translate.nvim health and parser availability for the current buffer',
   force = true,
 })

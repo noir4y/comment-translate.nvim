@@ -90,6 +90,71 @@ describe('commands', function()
   end)
 end)
 
+describe('plugin commands', function()
+  local bufnr
+  local health_bufnr
+  local original_cmd
+  local original_loaded
+  local original_health
+  local original_get_parser
+
+  before_each(function()
+    package.loaded['comment-translate.health'] = nil
+    original_loaded = vim.g.loaded_comment_translate
+    vim.g.loaded_comment_translate = nil
+    original_cmd = vim.cmd
+    original_get_parser = vim.treesitter.get_parser
+
+    bufnr = vim.api.nvim_create_buf(false, false)
+    health_bufnr = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(bufnr)
+    vim.bo[bufnr].filetype = 'lua'
+
+    dofile('plugin/comment-translate.lua')
+  end)
+
+  after_each(function()
+    vim.cmd = original_cmd
+    vim.health = original_health
+    vim.treesitter.get_parser = original_get_parser
+    vim.g.loaded_comment_translate = original_loaded
+    pcall(vim.api.nvim_del_user_command, 'CommentTranslateHealth')
+    pcall(vim.api.nvim_del_user_command, 'CommentTranslateSetup')
+    if health_bufnr and vim.api.nvim_buf_is_valid(health_bufnr) then
+      vim.api.nvim_buf_delete(health_bufnr, { force = true })
+    end
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+      vim.api.nvim_buf_delete(bufnr, { force = true })
+    end
+  end)
+
+  it('should capture the current buffer before running the health check', function()
+    local parser_bufnr
+    local health = require('comment-translate.health')
+    original_health = vim.health
+    vim.health = {
+      start = function() end,
+      ok = function() end,
+      error = function() end,
+      warn = function() end,
+      info = function() end,
+    }
+    vim.treesitter.get_parser = function(target_bufnr)
+      parser_bufnr = target_bufnr
+      return {}
+    end
+
+    vim.cmd = function(_)
+      vim.api.nvim_set_current_buf(health_bufnr)
+      health.check()
+    end
+
+    vim.api.nvim_cmd({ cmd = 'CommentTranslateHealth' }, {})
+
+    assert.equals(bufnr, parser_bufnr)
+  end)
+end)
+
 describe('autocmds', function()
   local autocmds
   local config

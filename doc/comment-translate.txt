@@ -11,12 +11,17 @@ REQUIREMENTS                                    *comment-translate-requirements*
 
 - Neovim 0.8+
 - plenary.nvim (required)
-- nvim-treesitter (recommended)
+- Tree-sitter parser support for the languages you want to inspect
+  (recommended)
 - curl command (for translation API)
 - Internet connection
 - Translation uses the configured external service (`google` or `llm`) via
   curl. Network policy changes (proxy/firewall) or upstream API changes may
   break translation; inform users in restricted environments.
+- Parsers may come from bundled Neovim parsers, manual installation, or
+  parser-providing plugin setups such as nvim-treesitter.
+- comment-translate.nvim uses Neovim's built-in Tree-sitter APIs and does not
+  require the nvim-treesitter plugin itself.
 
 PRIVACY / DATA HANDLING                          *comment-translate-privacy*
 
@@ -40,7 +45,6 @@ Using lazy.nvim: >lua
       'noir4y/comment-translate.nvim',
       dependencies = {
         'nvim-lua/plenary.nvim',
-        'nvim-treesitter/nvim-treesitter',
       },
       config = function()
         require('comment-translate').setup({
@@ -55,7 +59,6 @@ Using packer.nvim: >lua
       'noir4y/comment-translate.nvim',
       requires = {
         'nvim-lua/plenary.nvim',
-        'nvim-treesitter/nvim-treesitter',
       },
       config = function()
         require('comment-translate').setup({
@@ -64,6 +67,8 @@ Using packer.nvim: >lua
       end,
     }
 <
+
+If you already manage parsers through nvim-treesitter, you can keep doing so.
 
 CONFIGURATION                                   *comment-translate-config*
 
@@ -178,7 +183,13 @@ COMMANDS                                        *comment-translate-commands*
     Translate selected text and replace it.
 
 *:CommentTranslateHealth*
-    Check plugin health and dependencies.
+    Check plugin health and parser availability for the buffer that
+    invoked the command.
+
+    Use :checkhealth comment-translate for general dependency and
+    configuration checks.
+    Use :CommentTranslateHealth from the file buffer you want to inspect
+    when you also want parser availability checked for that buffer.
 
 *:CommentTranslateSetup*
     Setup plugin with default settings.
