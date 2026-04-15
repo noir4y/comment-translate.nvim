@@ -40,9 +40,14 @@ For sensitive repositories, local Ollama models are the recommended setup.
 - Neovim 0.8+
 - `curl`
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) (required)
-- [nvim-treesitter](https://github.com/nvim-treesitter/nvim-treesitter) (recommended)
+- Tree-sitter parser support for the languages you want to inspect (recommended)
 
 Note: Internet is not required when you use local translation only (for example, Ollama running locally).
+
+Parsers may come from bundled Neovim parsers, manual installation, or
+parser-providing plugin setups such as `nvim-treesitter`.
+`comment-translate.nvim` uses Neovim's built-in Tree-sitter APIs and does not
+require the `nvim-treesitter` plugin itself.
 
 ## Installation
 
@@ -53,7 +58,6 @@ Note: Internet is not required when you use local translation only (for example,
   'noir4y/comment-translate.nvim',
   dependencies = {
     'nvim-lua/plenary.nvim',
-    'nvim-treesitter/nvim-treesitter',
   },
   config = function()
     require('comment-translate').setup({})
@@ -68,13 +72,14 @@ use {
   'noir4y/comment-translate.nvim',
   requires = {
     'nvim-lua/plenary.nvim',
-    'nvim-treesitter/nvim-treesitter',
   },
   config = function()
     require('comment-translate').setup({})
   end,
 }
 ```
+
+If you already manage parsers through `nvim-treesitter`, you can keep doing so.
 
 ## Usage
 
@@ -175,7 +180,11 @@ require('comment-translate').setup({
 - `:CommentTranslateToggle`      — Toggle immersive translation globally
 - `:CommentTranslateUpdate`      — Update immersive translation for current buffer
 - `:CommentTranslateSetup`       — Setup plugin with default settings
-- `:CommentTranslateHealth`      — Health check (:checkhealth comment-translate)
+- `:CommentTranslateHealth`      — Health check, including parser availability for the buffer that invoked it
+
+Use `:checkhealth comment-translate` for general dependency and configuration checks.
+Use `:CommentTranslateHealth` from the file buffer you want to inspect when you
+also want parser availability checked for that buffer.
 
 ## Development
 

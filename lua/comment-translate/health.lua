@@ -1,8 +1,13 @@
 ---@brief Health check for comment-translate.nvim
----Run with :checkhealth comment-translate
+---Run with :checkhealth comment-translate or :CommentTranslateHealth
 
 local M = {}
 local utils = require('comment-translate.utils')
+local pending_target_bufnr
+local parser_sources_note = 'Parsers may come from bundled Neovim parsers, manual installation, or '
+  .. 'parser-providing plugin setups such as nvim-treesitter'
+local parser_api_note = "comment-translate.nvim uses Neovim's built-in Tree-sitter APIs "
+  .. 'and does not require the nvim-treesitter plugin itself'
 
 ---@param module_name string
 ---@return boolean
@@ -15,6 +20,70 @@ end
 local function get_nvim_version()
   local v = vim.version()
   return string.format('%d.%d.%d', v.major, v.minor, v.patch)
+end
+
+---@return number?
+local function consume_health_target_bufnr()
+  local bufnr = pending_target_bufnr
+  pending_target_bufnr = nil
+
+  if type(bufnr) == 'number' and vim.api.nvim_buf_is_valid(bufnr) then
+    return bufnr
+  end
+
+  return nil
+end
+
+---@param bufnr number?
+function M.set_target_bufnr(bufnr)
+  if type(bufnr) == 'number' and vim.api.nvim_buf_is_valid(bufnr) then
+    pending_target_bufnr = bufnr
+    return
+  end
+
+  pending_target_bufnr = nil
+end
+
+---@param bufnr number?
+---@return string, string
+local function check_target_buffer_parser(bufnr)
+  if not vim.treesitter or type(vim.treesitter.get_parser) ~= 'function' then
+    return 'api_unavailable', 'Tree-sitter API is not available in this Neovim build'
+  end
+
+  if not bufnr then
+    return 'target_required', 'Parser validation was skipped because no target buffer was provided'
+  end
+
+  local buftype = vim.bo[bufnr].buftype
+  if buftype ~= '' then
+    return 'non_file_buffer',
+      string.format(
+        'The requested buffer is not a normal file buffer (buftype=%s); skipped parser validation',
+        buftype
+      )
+  end
+
+  local filetype = vim.bo[bufnr].filetype
+
+  if not filetype or filetype == '' then
+    return 'filetype_missing', 'The requested buffer has no filetype; skipped parser validation'
+  end
+
+  local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
+  if ok and parser then
+    return 'ok',
+      string.format(
+        'Tree-sitter parser is available for the requested buffer filetype: %s',
+        filetype
+      )
+  end
+
+  return 'parser_missing',
+    string.format(
+      'Tree-sitter parser is not available for the requested buffer filetype: %s',
+      filetype
+    )
 end
 
 function M.check()
@@ -39,13 +108,31 @@ function M.check()
     })
   end
 
-  -- nvim-treesitter (recommended)
-  if check_module('nvim-treesitter') then
-    vim.health.ok('nvim-treesitter is installed')
+  local parser_status, parser_message = check_target_buffer_parser(consume_health_target_bufnr())
+  if parser_status == 'ok' then
+    vim.health.ok(parser_message)
+  elseif parser_status == 'api_unavailable' then
+    vim.health.warn(parser_message, {
+      'Tree-sitter support is not available in this Neovim build',
+      'Without a parser, regex-based parsing will be used as fallback',
+    })
+  elseif parser_status == 'target_required' then
+    vim.health.info(parser_message)
+    vim.health.info('Use :CommentTranslateHealth from the file buffer you want to inspect')
+  elseif parser_status == 'non_file_buffer' then
+    vim.health.info(parser_message)
+    vim.health.info(
+      'Use :CommentTranslateHealth from a normal file buffer to validate parser availability'
+    )
+  elseif parser_status == 'filetype_missing' then
+    vim.health.info(parser_message)
+    vim.health.info('Set the buffer filetype and rerun :CommentTranslateHealth')
   else
-    vim.health.warn('nvim-treesitter is not installed (recommended for accurate parsing)', {
-      'Install nvim-treesitter: https://github.com/nvim-treesitter/nvim-treesitter',
-      'Without treesitter, regex-based parsing will be used as fallback',
+    vim.health.warn(parser_message, {
+      'Install a parser for this language using your preferred method',
+      parser_sources_note,
+      parser_api_note,
+      'Without a parser, regex-based parsing will be used as fallback',
     })
   end
 

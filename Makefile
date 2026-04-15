@@ -1,4 +1,4 @@
-.PHONY: test test-file clean fmt fmt-check lint
+.PHONY: test test-file clean fmt fmt-check lint health
 
 # Test runner
 PLENARY_DIR ?= /tmp/plenary.nvim
@@ -29,8 +29,14 @@ docs:
 	nvim --headless -c "helptags doc/" -c "qa"
 
 # Health check
-health:
-	nvim --headless -c "checkhealth comment-translate" -c "qa"
+health: $(PLENARY_DIR)
+	nvim --headless -i NONE -u tests/minimal_init.lua \
+		-c "runtime plugin/comment-translate.lua" \
+		-c "enew" \
+		-c "set filetype=lua" \
+		-c "CommentTranslateHealth" \
+		-c "lua print(table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n'))" \
+		-c "qa"
 
 # Format Lua files
 fmt:
