@@ -30,11 +30,12 @@ docs:
 
 # Health check
 health: $(PLENARY_DIR)
-	nvim --headless -u tests/minimal_init.lua \
+	nvim --headless -i NONE -u tests/minimal_init.lua \
 		-c "runtime plugin/comment-translate.lua" \
 		-c "enew" \
 		-c "set filetype=lua" \
 		-c "CommentTranslateHealth" \
+		-c "lua print(table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), '\n'))" \
 		-c "qa"
 
 # Format Lua files
