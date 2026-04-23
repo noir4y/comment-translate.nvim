@@ -82,6 +82,14 @@ function M.show(text, opts)
   vim.wo[hover_winid].relativenumber = false
   vim.wo[hover_winid].cursorline = false
   vim.wo[hover_winid].winhighlight = 'Normal:NormalFloat'
+
+  for _, key in ipairs({ 'q', '<Esc>' }) do
+    vim.keymap.set('n', key, M.close, {
+      buffer = hover_bufnr,
+      silent = true,
+      desc = 'Comment Translate: close hover',
+    })
+  end
 end
 
 return M
