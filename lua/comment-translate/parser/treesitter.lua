@@ -10,6 +10,7 @@ local comment_node_types = {
   documentation_comment = true,
   multiline_comment = true,
   doc_comment = true,
+  marginalia = true,
 }
 
 local string_node_types = {
@@ -44,6 +45,10 @@ local quoted_node_types = {
   indented_string_expression = true,
   multi_line_string_literal = true,
   link_title = true,
+  heredoc_body = true,
+  block_scalar = true,
+  string_scalar = true,
+  literal = true,
 }
 
 local function get_parser(bufnr)
@@ -212,7 +217,8 @@ end
 
 local function get_target_text(node, bufnr, injected)
   local text = vim.treesitter.get_node_text(node, bufnr)
-  if not injected or not comment_node_types[node:type()] then
+  -- SQL block comments need node-bounded cleaning even in the host tree.
+  if not comment_node_types[node:type()] or (not injected and node:type() ~= 'marginalia') then
     return text
   end
   -- Clean only a proven comment node. The host commentstring and a generic

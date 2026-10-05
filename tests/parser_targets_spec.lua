@@ -261,7 +261,205 @@ describe('parser target request boundary', function()
     expect_text('hello ${name}')
   end)
 
+  for _, profile in ipairs({ 'native', 'parser-only' }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+      for _, delimiter in ipairs({ '"', "'", '`' }) do
+        it(
+          'preserves bounded Bash heredoc quotes via '
+            .. flow
+            .. ' ('
+            .. profile
+            .. delimiter
+            .. ')',
+          function()
+            if not require_language('bash') then
+              return
+            end
+            if profile == 'parser-only' then
+              query('bash', '')
+            end
+            if
+              not fixture('bash', {
+                'cat <<EOF',
+                delimiter .. 'こんにちは -- content' .. delimiter,
+                'EOF',
+                'printf outside',
+              }, 2, 4)
+            then
+              return
+            end
+            config.setup({ targets = { comment = true, string = true } })
+            request(flow)
+            expect_text('こんにちは -- content')
+            local root = vim.treesitter.get_parser(bufnr)
+            local node = root:trees()[1]:root():named_descendant_for_range(1, 4, 1, 4)
+            while node and node:type() ~= 'heredoc_body' do
+              node = node:parent()
+            end
+            assert.is_not_nil(node)
+            assert.is_nil(next(root:children()))
+
+            calls = {}
+            config.setup({ targets = { comment = true, string = false } })
+            request(flow)
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = false, string = false } })
+            request(flow)
+            assert.equals(0, #calls)
+
+            config.setup({ targets = { comment = false, string = true } })
+            vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { delimiter .. 'edited' .. delimiter })
+            vim.api.nvim_win_set_cursor(0, { 2, 3 })
+            request(flow)
+            expect_text('edited')
+            calls = {}
+            for _, position in ipairs({ { 1, 5 }, { 3, 1 }, { 4, 8 } }) do
+              vim.api.nvim_win_set_cursor(0, position)
+              request(flow)
+            end
+            assert.equals(0, #calls)
+          end
+        )
+      end
+    end
+  end
+
+  for _, form in ipairs({
+    { header = 'message: |', line = '  %s', row = 2, col = 4, node = 'block_scalar' },
+    { header = 'message: >', line = '  %s', row = 2, col = 4, node = 'block_scalar' },
+    { header = '', line = 'message: He said %s', row = 1, col = 18, node = 'string_scalar' },
+  }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+      it(
+        'preserves quoted YAML scalar content via ' .. flow .. ' (' .. form.header .. ')',
+        function()
+          for _, delimiter in ipairs({ '"', "'", '`' }) do
+            local lines = {
+              string.format(form.line, delimiter .. 'こんにちは -- content' .. delimiter),
+              'outside: value',
+            }
+            if form.header ~= '' then
+              table.insert(lines, 1, form.header)
+            end
+            if not fixture('yaml', lines, form.row, form.col) then
+              return
+            end
+            config.setup({ targets = { comment = true, string = true } })
+            request(flow)
+            expect_text('こんにちは -- content')
+            local root = vim.treesitter.get_parser(bufnr)
+            local node = root
+              :trees()[1]
+              :root()
+              :named_descendant_for_range(form.row - 1, form.col, form.row - 1, form.col)
+            while node and node:type() ~= form.node do
+              node = node:parent()
+            end
+            assert.is_not_nil(node)
+            calls = {}
+            config.setup({ targets = { comment = true, string = false } })
+            request(flow)
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = false, string = false } })
+            request(flow)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = false, string = true } })
+            vim.api.nvim_buf_set_lines(bufnr, form.row - 1, form.row, false, {
+              string.format(form.line, delimiter .. 'edited' .. delimiter),
+            })
+            request(flow)
+            expect_text('edited')
+            calls = {}
+            vim.api.nvim_win_set_cursor(0, { #lines, 10 })
+            request(flow)
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
+            request(flow)
+            assert.equals(0, #calls)
+          end
+        end
+      )
+    end
+  end
+
+  for _, embedded in ipairs({ false, true }) do
+    for _, multiline in ipairs({ false, true }) do
+      for _, flow in ipairs({ 'hover', 'manual', 'auto', 'immersive' }) do
+        it(
+          'preserves SQL block comments via '
+            .. flow
+            .. ' (embedded='
+            .. tostring(embedded)
+            .. ', multiline='
+            .. tostring(multiline)
+            .. ')',
+          function()
+            if not require_language('sql') or (embedded and not require_language('markdown')) then
+              return
+            end
+            query('sql', '')
+            if embedded then
+              query(
+                'markdown',
+                '(fenced_code_block (info_string) @injection.language'
+                  .. ' (code_fence_content) @injection.content (#set! injection.include-children))'
+              )
+            end
+            local function lines(body)
+              local result = vim.list_extend({}, body)
+              table.insert(result, 'SELECT 1;')
+              if embedded then
+                table.insert(result, 1, '```sql')
+                table.insert(result, '```')
+              end
+              return result
+            end
+            local body = multiline and { '/* こんにちは', 'body */' }
+              or { '/* こんにちは */' }
+            local row = embedded and 2 or 1
+            if not fixture(embedded and 'markdown' or 'sql', lines(body), row, 4) then
+              return
+            end
+            config.setup({ targets = { comment = true, string = false } })
+            if flow == 'immersive' then
+              commands.enable_immersive(bufnr)
+            else
+              request(flow)
+            end
+            expect_text(multiline and 'こんにちは body' or 'こんにちは')
+            calls = {}
+            config.setup({ targets = { comment = false, string = true } })
+            if flow == 'immersive' then
+              commands.update_immersive(bufnr)
+            else
+              request(flow)
+            end
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = true, string = false } })
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines({ '/* edited */' }))
+            if flow == 'immersive' then
+              commands.update_immersive(bufnr)
+            else
+              request(flow)
+            end
+            expect_text('edited')
+            calls = {}
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines({ 'SELECT 2;' }))
+            if flow == 'immersive' then
+              commands.update_immersive(bufnr)
+            else
+              request(flow)
+            end
+            assert.equals(0, #calls)
+          end
+        )
+      end
+    end
+  end
+
   local quoted_forms = {
+    { ft = 'sql', prefix = 'SELECT ', suffix = ';' },
     { ft = 'html', prefix = '<div title=', suffix = '></div>' },
     { ft = 'dockerfile', prefix = 'ENV NAME=', suffix = '' },
     { ft = 'fish', prefix = 'echo ', suffix = '' },

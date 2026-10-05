@@ -115,7 +115,8 @@ with no comments are not reclassified by regex. If parsing is unavailable or fai
 regex fallback remains available and uses the target settings.
 At an end-of-line insertion position, hover can resolve the preceding comment;
 this does not extend string detection beyond its node. Quoted-node extraction
-is restricted to the classified string node.
+is restricted to the classified string node, including quoted content in
+Bash heredoc bodies, YAML block or plain string scalars, and SQL literals.
 
 Injected languages are parsed on first use. A host comment or string keeps its
 existing translation unit and target category, including strings used by
