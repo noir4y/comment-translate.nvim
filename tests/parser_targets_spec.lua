@@ -21,8 +21,8 @@ describe('parser target request boundary', function()
 
   local function require_language(lang)
     local load = language_api.add or language_api.require_language
-    local ok, result = pcall(load, lang)
-    if not ok or result == false then
+    local ok, result, err = pcall(load, lang)
+    if not ok or result == false or (result == nil and err ~= nil) then
       pending('real ' .. lang .. ' parser unavailable; compatibility unverified')
       return false
     end
@@ -1207,6 +1207,470 @@ describe('parser target request boundary', function()
             calls = {}
             config.setup({ targets = { comment = false, string = true } })
             vim.api.nvim_win_set_cursor(0, { 3, 3 })
+            request('hover')
+            commands.update_immersive(bufnr)
+            assert.equals(0, #calls)
+          end
+        )
+      end
+    end
+  end
+
+  for _, profile in ipairs({ 'native', 'unclipped sibling model' }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto', 'immersive' }) do
+      it(
+        'preserves fallback beside another parent-owned child: ' .. profile .. ', ' .. flow,
+        function()
+          for _, lang in ipairs({ 'markdown', 'vim', 'lua' }) do
+            if not require_language(lang) then
+              return
+            end
+          end
+          local outer = ''
+          for _, label in ipairs({ 'a', 'b' }) do
+            outer = outer
+              .. '(fenced_code_block (info_string (language) @_lang)'
+              .. ' (code_fence_content) @injection.content (#eq? @_lang "'
+              .. label
+              .. '") (#set! injection.language "vim") (#set! injection.combined))'
+          end
+          query('markdown', outer)
+          local content = vim_has_body() and '(lua_statement (script (body) @injection.content))'
+            or '(lua_statement (chunk) @injection.content)'
+          query(
+            'vim',
+            '('
+              .. content
+              .. ' (#set! injection.language "lua") (#match? @injection.content "START"))'
+          )
+          query('lua', '')
+          local modeled = false
+          if profile == 'unclipped sibling model' then
+            language_tree_api._get_injections = function(language_tree, ...)
+              local result = original_get_injections(language_tree, ...)
+              if language_tree:lang() == 'vim' and result.lua then
+                for index, regions in ipairs(result.lua) do
+                  local first, last = regions[1], regions[#regions]
+                  local end_index = #last == 6 and 4 or 3
+                  result.lua[index] =
+                    { { first[1], first[2], last[end_index], last[end_index + 1] } }
+                  modeled = true
+                end
+              end
+              return result
+            end
+          end
+          config.setup({ targets = { comment = true, string = false } })
+          assert.is_true(fixture('markdown', {
+            fence .. 'a',
+            'lua << EOF',
+            '--[[START',
+            fence,
+            fence .. 'b',
+            'lua << EOF2',
+            '-- こんにちは',
+            'EOF2',
+            fence,
+            fence .. 'a',
+            ']]',
+            'EOF',
+            fence,
+          }, 7, 5))
+          if flow == 'immersive' then
+            commands.enable_immersive(bufnr)
+          else
+            if flow == 'immersive' then
+              commands.update_immersive(bufnr)
+            else
+              request(flow)
+            end
+          end
+          local parent = original_get_parser(bufnr):children().vim
+          assert.equals(2, vim.tbl_count(parent:trees()))
+          assert.equals(1, vim.tbl_count(parent:children().lua:trees()))
+          if profile == 'unclipped sibling model' then
+            assert.is_true(modeled)
+          end
+          expect_text('こんにちは')
+          calls = {}
+          vim.api.nvim_buf_set_lines(bufnr, 6, 7, false, { '-- 世界' })
+          if flow == 'immersive' then
+            commands.update_immersive(bufnr)
+          else
+            if flow == 'immersive' then
+              commands.update_immersive(bufnr)
+            else
+              request(flow)
+            end
+          end
+          expect_text('世界')
+          calls = {}
+          config.setup({ targets = { comment = false, string = true } })
+          if flow == 'immersive' then
+            commands.update_immersive(bufnr)
+          else
+            if flow == 'immersive' then
+              commands.update_immersive(bufnr)
+            else
+              request(flow)
+            end
+          end
+          assert.equals(0, #calls)
+        end
+      )
+    end
+  end
+
+  for _, profile in ipairs({ 'native', 'outside-parent model' }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto', 'immersive' }) do
+      it('withholds ambiguous nested parser coverage: ' .. profile .. ', ' .. flow, function()
+        for _, lang in ipairs({ 'markdown', 'vim', 'lua' }) do
+          if not require_language(lang) then
+            return
+          end
+        end
+        query(
+          'markdown',
+          '(fenced_code_block (code_fence_content) @injection.content'
+            .. ' (#set! injection.language "vim"))'
+        )
+        local has_body = vim_has_body()
+        local content = has_body and '(lua_statement (script (body) @injection.content))'
+          or '(lua_statement (chunk) @injection.content)'
+        query(
+          'vim',
+          '('
+            .. content
+            .. ' (#set! injection.language "lua")'
+            .. ' (#offset! @injection.content '
+            .. (has_body and '-1 -10' or '-2 0')
+            .. ' 0 0))'
+        )
+        query('lua', '')
+        local modeled = false
+        if profile == 'outside-parent model' then
+          language_tree_api._get_injections = function(language_tree, ...)
+            local result = original_get_injections(language_tree, ...)
+            if language_tree:lang() == 'vim' and result.lua then
+              for index in ipairs(result.lua) do
+                result.lua[index] = { { 0, 0, 3, 0 } }
+                modeled = true
+              end
+            end
+            return result
+          end
+        end
+        config.setup({ targets = { comment = true, string = false } })
+        if
+          not fixture('markdown', {
+            fence .. 'vim',
+            'lua << EOF',
+            'local value = "alpha -- hidden"',
+            'EOF',
+            fence,
+          }, 3, 24)
+        then
+          return
+        end
+        if flow == 'immersive' then
+          commands.enable_immersive(bufnr)
+        else
+          request(flow)
+        end
+        local child = original_get_parser(bufnr):children().vim:children().lua
+        assert.is_true(next(child:trees()) ~= nil)
+        assert.equals(0, #calls)
+        if profile == 'outside-parent model' then
+          assert.is_true(modeled)
+        end
+        -- A fresh parser with an owned capture still preserves eligible text.
+        language_tree_api._get_injections = original_get_injections
+        query('vim', '(' .. content .. ' (#set! injection.language "lua"))')
+        commands.cleanup_buffer(bufnr)
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+        bufnr = vim.api.nvim_create_buf(false, true)
+        vim.api.nvim_set_current_buf(bufnr)
+        assert.is_true(fixture('markdown', {
+          fence .. 'vim',
+          'lua << EOF',
+          '-- こんにちは',
+          'EOF',
+          fence,
+        }, 3, 4))
+        if flow == 'immersive' then
+          commands.enable_immersive(bufnr)
+        else
+          request(flow)
+        end
+        expect_text('こんにちは')
+      end)
+    end
+  end
+
+  for _, form in ipairs({
+    {
+      side = 'before',
+      kind = 'comment',
+      unparsed = '-- こんにちは ',
+      expected = 'こんにちは',
+    },
+    {
+      side = 'after',
+      kind = 'comment',
+      unparsed = ' -- こんにちは',
+      expected = 'こんにちは',
+    },
+    {
+      side = 'before',
+      kind = 'string',
+      unparsed = '"こんにちは" ',
+      expected = 'こんにちは',
+    },
+    { side = 'before', kind = 'string', unparsed = '"unclosed ', expected = false },
+  }) do
+    local flows = form.kind == 'comment' and { 'hover', 'manual', 'auto', 'immersive' }
+      or { 'hover', 'manual', 'auto' }
+    for _, flow in ipairs(flows) do
+      it(
+        'subtracts partial same-line parsed coverage '
+          .. form.side
+          .. ' fallback via '
+          .. flow
+          .. ': '
+          .. form.unparsed:sub(1, 1),
+        function()
+          if not require_language('markdown') or not require_language('lua') then
+            return
+          end
+          local parsed = 'return "hidden"'
+          local offset = form.side == 'before' and ('0 ' .. #form.unparsed .. ' 0 0')
+            or ('0 0 -1 ' .. #parsed)
+          query(
+            'markdown',
+            '((fenced_code_block (code_fence_content) @injection.content)'
+              .. ' (#set! injection.language "lua") (#offset! @injection.content '
+              .. offset
+              .. '))'
+          )
+          query('lua', '')
+          config.setup({
+            targets = { comment = form.kind == 'comment', string = form.kind == 'string' },
+          })
+          local line = form.side == 'before' and form.unparsed .. parsed or parsed .. form.unparsed
+          local col = form.side == 'before' and 4 or #parsed + 4
+          if not fixture('markdown', { fence .. 'lua', line, fence }, 2, col) then
+            return
+          end
+          if flow == 'immersive' then
+            commands.enable_immersive(bufnr)
+          else
+            request(flow)
+          end
+          local child = original_get_parser(bufnr):children().lua
+          assert.is_not_nil(child)
+          assert.is_true(next(child:trees()) ~= nil)
+          if form.expected and (flow ~= 'immersive' or form.kind == 'comment') then
+            expect_text(form.expected)
+          else
+            assert.equals(0, #calls)
+          end
+          calls = {}
+          if flow == 'immersive' then
+            commands.update_immersive(bufnr)
+          else
+            commands.enable_immersive(bufnr)
+          end
+          if form.kind == 'comment' then
+            expect_text(form.expected)
+          else
+            assert.equals(0, #calls)
+          end
+          calls = {}
+          -- An edit inside the parsed suffix must not change the fallback unit.
+          vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { (line:gsub('hidden', 'secret')) })
+          if flow == 'immersive' then
+            commands.update_immersive(bufnr)
+          else
+            request(flow)
+          end
+          if form.expected and (flow ~= 'immersive' or form.kind == 'comment') then
+            expect_text(form.expected)
+          else
+            assert.equals(0, #calls)
+          end
+          calls = {}
+          config.setup({ targets = { comment = false, string = false } })
+          if flow == 'immersive' then
+            commands.update_immersive(bufnr)
+          else
+            request(flow)
+          end
+          commands.update_immersive(bufnr)
+          assert.equals(0, #calls)
+        end
+      )
+    end
+  end
+
+  it('preserves fallback comment insertion EOL after partial parsed coverage', function()
+    if not require_language('markdown') or not require_language('lua') then
+      return
+    end
+    local parsed = 'return "hidden"'
+    local line = parsed .. ' -- こんにちは'
+    query(
+      'markdown',
+      '((fenced_code_block (code_fence_content) @injection.content)'
+        .. ' (#set! injection.language "lua") (#offset! @injection.content 0 0 -1 '
+        .. #parsed
+        .. '))'
+    )
+    query('lua', '')
+    config.setup({ targets = { comment = true, string = false } })
+    vim.o.virtualedit = 'onemore'
+    if not fixture('markdown', { fence .. 'lua', line, fence }, 2, #line) then
+      return
+    end
+    request('insert')
+    expect_text('こんにちは')
+    calls = {}
+    config.setup({ targets = { comment = false, string = true } })
+    request('insert')
+    assert.equals(0, #calls)
+  end)
+
+  for _, profile in ipairs({ 'native', 'unclipped ancestor model' }) do
+    for _, order in ipairs({ 'spanning first', 'separate first' }) do
+      for _, flow in ipairs({ 'hover', 'manual', 'auto', 'immersive' }) do
+        it(
+          'keeps effective ancestor ownership at three levels: '
+            .. profile
+            .. ', '
+            .. order
+            .. ', '
+            .. flow,
+          function()
+            for _, lang in ipairs({ 'markdown', 'vim', 'lua', 'javascript' }) do
+              if not require_language(lang) then
+                return
+              end
+            end
+            local outer = ''
+            for _, label in ipairs({ 'a', 'b' }) do
+              outer = outer
+                .. '(fenced_code_block (info_string (language) @_lang)'
+                .. ' (code_fence_content) @injection.content (#eq? @_lang "'
+                .. label
+                .. '")'
+                .. ' (#set! injection.language "vim") (#set! injection.combined))'
+            end
+            query('markdown', outer)
+            query(
+              'vim',
+              vim_has_body()
+                  and '(lua_statement (script (body) @injection.content (#set! injection.language "lua")))'
+                or '(lua_statement (chunk) @injection.content (#set! injection.language "lua"))'
+            )
+            query(
+              'lua',
+              '((function_call name: (identifier) @_name'
+                .. ' arguments: (arguments (binary_expression) @injection.content))'
+                .. ' (#eq? @_name "js") (#set! injection.language "javascript")'
+                .. ' (#set! injection.include-children))'
+            )
+            query('javascript', '')
+            local modeled = false
+            if profile == 'unclipped ancestor model' then
+              language_tree_api._get_injections = function(language_tree, ...)
+                local result = original_get_injections(language_tree, ...)
+                if language_tree:lang() == 'vim' and result.lua then
+                  -- Keep separate parent trees; model only each capture's old hull.
+                  for index, regions in ipairs(result.lua) do
+                    local first, last = regions[1], regions[#regions]
+                    if first and last then
+                      local end_index = #last == 6 and 4 or 3
+                      result.lua[index] =
+                        { { first[1], first[2], last[end_index], last[end_index + 1] } }
+                      modeled = true
+                    end
+                  end
+                end
+                return result
+              end
+            end
+            local root, enumerating_regions
+            vim.treesitter.get_parser = function(...)
+              root = original_get_parser(...)
+              return root
+            end
+            _G.pairs = function(value)
+              if enumerating_regions then
+                return original_pairs(value)
+              end
+              local parent = root and root:children().vim
+              local ancestor = parent and parent:children().lua
+              if ancestor and value == ancestor:trees() then
+                enumerating_regions = true
+                local regions = ancestor:included_regions()
+                enumerating_regions = false
+                local keys = {}
+                for key in original_pairs(value) do
+                  table.insert(keys, key)
+                end
+                table.sort(keys, function(a, b)
+                  local first_a, first_b = regions[a][1], regions[b][1]
+                  return order == 'spanning first' and first_a[1] < first_b[1]
+                    or order == 'separate first' and first_a[1] > first_b[1]
+                end)
+                local index = 0
+                return function()
+                  index = index + 1
+                  local key = keys[index]
+                  if key then
+                    return key, value[key]
+                  end
+                end
+              end
+              return original_pairs(value)
+            end
+            if
+              not fixture('markdown', {
+                fence .. 'a',
+                'lua << EOF',
+                '--[[',
+                fence,
+                fence .. 'b',
+                'lua << EOF2',
+                'js(a // legitimate)',
+                'EOF2',
+                fence,
+                fence .. 'a',
+                ']]',
+                'EOF',
+                fence,
+              }, 7, 10)
+            then
+              return
+            end
+            if flow == 'immersive' then
+              commands.enable_immersive(bufnr)
+            else
+              request(flow)
+              expect_text('legitimate')
+              calls = {}
+              commands.enable_immersive(bufnr)
+            end
+            expect_text('legitimate')
+            local parent = original_get_parser(bufnr):children().vim
+            assert.equals(2, vim.tbl_count(parent:trees()))
+            local ancestor = parent:children().lua
+            assert.equals(2, vim.tbl_count(ancestor:trees()))
+            assert.equals(1, vim.tbl_count(ancestor:children().javascript:trees()))
+            if profile == 'unclipped ancestor model' then
+              assert.is_true(modeled)
+            end
+            calls = {}
+            config.setup({ targets = { comment = false, string = true } })
             request('hover')
             commands.update_immersive(bufnr)
             assert.equals(0, #calls)

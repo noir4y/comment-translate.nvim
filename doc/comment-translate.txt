@@ -277,11 +277,17 @@ existing translation unit and target category, including strings used by
 vim.cmd. In Vim language heredocs, Markdown fenced or indented code, metadata and HTML
 blocks, and HTML script/style content, a missing injected parser or injection
 query allows regex fallback only within the unparsed embedded content. Markdown
-metadata delimiters are excluded. Block comments cannot cross fallback ranges.
+metadata delimiters are excluded. Hover and immersive fallback both subtract
+parsed child coverage, including partial coverage on the same line. Block
+comments cannot cross fallback ranges.
 Hover chooses injected languages by their individual included regions, so gaps
 between combined regions remain available to the host or another injected language.
 Nested targets and unparsed content are clipped to their owning parent tree's
 regions at each level; regions from separate parent trees are not pooled.
+Immersive ancestor exclusions use those same effective owning regions.
+When a nested query extends beyond provable parent ownership, its parsed overlap
+is withheld from fallback rather than extracted.
+A child owned by another parent does not suppress fallback in a sibling tree.
 Targets spanning disjoint combined injection regions are not submitted, because
 extracting their contiguous text could include intervening host code.
 
