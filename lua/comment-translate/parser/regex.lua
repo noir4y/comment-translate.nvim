@@ -47,10 +47,14 @@ local function clip_line(text, row, range)
   return text:sub(start_col + 1, end_col), start_col
 end
 
-local function line_at_cursor(bufnr, row, col, range)
+local function line_at_cursor(bufnr, row, col, range, comment_end)
   local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
   local clipped, offset = clip_line(text, row, range)
-  if not clipped or (col and range and (col < offset or col >= offset + #clipped)) then
+  local at_comment_end = comment_end and clipped and col == #text and col == offset + #clipped
+  if
+    not clipped
+    or (col and range and (col < offset or (col >= offset + #clipped and not at_comment_end)))
+  then
     return nil
   end
   return clipped, col and (col - offset) or nil
@@ -220,12 +224,13 @@ function M.get_comment_at_line(bufnr, line, col, range)
     return nil
   end
 
-  local line_text, local_col = line_at_cursor(bufnr, line, col, range)
+  local line_text, local_col = line_at_cursor(bufnr, line, col, range, true)
   if not line_text then
     return nil
   end
 
-  local target_col = local_col and (local_col + 1) or nil
+  -- An insertion cursor can sit just after a comment at physical end of line.
+  local target_col = local_col and (local_col == #line_text and local_col or local_col + 1) or nil
 
   for _, pattern in ipairs(line_comment_patterns) do
     local comment = line_text:match(pattern)

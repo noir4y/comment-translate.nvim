@@ -111,14 +111,22 @@ With automatic hover enabled, detected text can be submitted on `CursorHold` or
 `CursorHoldI`; manual hover submits it when invoked.
 
 A successful Tree-sitter parse is authoritative: excluded targets and a buffer
-with no comments are not reclassified by regex. If parsing is unavailable,
+with no comments are not reclassified by regex. If parsing is unavailable or fails,
 regex fallback remains available and uses the target settings.
+At an end-of-line insertion position, hover can resolve the preceding comment;
+this does not extend string detection beyond its node. Quoted-node extraction
+is restricted to the classified string node.
 
 Injected languages are parsed on first use. A host comment or string keeps its
 existing translation unit and target category, including strings used by
-`vim.cmd`. In Vim language heredocs and Markdown code fences, an unavailable
-injected parser or injection query allows regex fallback only within the
-unparsed embedded content. Block comments cannot cross fallback ranges.
+`vim.cmd`. In Vim language heredocs, Markdown fenced or indented code, metadata and HTML
+blocks, and HTML script/style content, a missing injected parser or injection
+query allows regex fallback only within the unparsed embedded content. Markdown
+metadata delimiters are excluded. Block comments cannot cross fallback ranges.
+Hover chooses injected languages by their individual included regions, so gaps
+between combined regions remain available to the host or another injected language.
+Nested targets and unparsed content are clipped to their owning parent tree's
+regions at each level; regions from separate parent trees are not pooled.
 Targets spanning disjoint combined injection regions are not submitted, because
 extracting their contiguous text could include intervening host code.
 
