@@ -53,13 +53,13 @@ local function clean_comment_text(text, bufnr)
   return utils.merge_lines(stripped)
 end
 
-local function normalize_text(text, node_type)
+local function normalize_text(text, node_type, bufnr)
   if not text then
     return nil
   end
 
   if node_type and node_type:find('comment') then
-    return clean_comment_text(text)
+    return clean_comment_text(text, bufnr)
   end
 
   return utils.trim(text)
@@ -72,16 +72,19 @@ function M.get_text_at_cursor(bufnr)
   local row, col = unpack(vim.api.nvim_win_get_cursor(0))
   row = row - 1
 
-  local text, node_type = treesitter.get_text_at_position(bufnr, row, col)
+  local text, node_type, handled, fallback_range = treesitter.get_text_at_position(bufnr, row, col)
   if text then
-    local cleaned = normalize_text(text, node_type)
+    local cleaned = normalize_text(text, node_type, bufnr)
     if utils.is_empty(cleaned) then
       return nil, node_type
     end
     return cleaned, node_type
   end
+  if handled then
+    return nil, node_type
+  end
 
-  local comment = regex.get_comment_at_line(bufnr, row, col)
+  local comment = regex.get_comment_at_line(bufnr, row, col, fallback_range)
   if comment then
     local cleaned = normalize_text(clean_comment_text(comment, bufnr), 'comment')
     if utils.is_empty(cleaned) then
@@ -90,7 +93,7 @@ function M.get_text_at_cursor(bufnr)
     return cleaned, 'comment'
   end
 
-  local str = regex.get_string_at_position(bufnr, row, col)
+  local str = regex.get_string_at_position(bufnr, row, col, fallback_range)
   if str then
     local cleaned = normalize_text(str)
     if utils.is_empty(cleaned) then
@@ -107,21 +110,21 @@ end
 function M.get_all_comments(bufnr)
   bufnr = bufnr or vim.api.nvim_get_current_buf()
 
-  local comments = treesitter.get_all_comments(bufnr)
-  if next(comments) then
-    local cleaned = {}
-    for line, text in pairs(comments) do
-      local normalized = clean_comment_text(text, bufnr)
-      if not utils.is_empty(normalized) then
-        cleaned[line] = normalized
+  local comments, handled, fallback_ranges = treesitter.get_all_comments(bufnr)
+  if not handled then
+    comments = regex.get_all_comments(bufnr)
+  else
+    for _, range in ipairs(fallback_ranges) do
+      for line, text in pairs(regex.get_all_comments(bufnr, range)) do
+        if not comments[line] then
+          comments[line] = text
+        end
       end
     end
-    return cleaned
   end
 
-  local regex_comments = regex.get_all_comments(bufnr)
   local cleaned = {}
-  for line, text in pairs(regex_comments) do
+  for line, text in pairs(comments) do
     local normalized = clean_comment_text(text, bufnr)
     if not utils.is_empty(normalized) then
       cleaned[line] = normalized

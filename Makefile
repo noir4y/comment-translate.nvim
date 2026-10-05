@@ -1,4 +1,4 @@
-.PHONY: test test-file clean fmt fmt-check lint health
+.PHONY: test test-file clean fmt fmt-check lint health docs
 
 # Test runner
 PLENARY_DIR ?= /tmp/plenary.nvim

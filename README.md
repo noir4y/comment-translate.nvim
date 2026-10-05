@@ -102,6 +102,30 @@ vim.keymap.set('n', '<leader>th', '<cmd>CommentTranslateHover<CR>', { silent = t
 :CommentTranslateReplace
 ```
 
+### Translation Targets and Parsing
+
+Hover detection uses `targets.comment` and `targets.string`. Immersive mode
+translates comments only and uses `targets.comment`. Selection replacement
+translates the explicitly selected text independently of these detection settings.
+With automatic hover enabled, detected text can be submitted on `CursorHold` or
+`CursorHoldI`; manual hover submits it when invoked.
+
+A successful Tree-sitter parse is authoritative: excluded targets and a buffer
+with no comments are not reclassified by regex. If parsing is unavailable,
+regex fallback remains available and uses the target settings.
+
+Injected languages are parsed on first use. A host comment or string keeps its
+existing translation unit and target category, including strings used by
+`vim.cmd`. In Vim language heredocs and Markdown code fences, an unavailable
+injected parser or injection query allows regex fallback only within the
+unparsed embedded content. Block comments cannot cross fallback ranges.
+Targets spanning disjoint combined injection regions are not submitted, because
+extracting their contiguous text could include intervening host code.
+
+Regex detection is approximate and can mistake delimiters inside strings for
+comments. Install the relevant parsers and injection queries for more precise
+detection; target settings alone cannot resolve ambiguous syntax in unparsed text.
+
 ## Configuration Example
 
 If `target_language` is omitted, comment-translate uses your system locale and falls back to `en`.
@@ -198,6 +222,11 @@ also want parser availability checked for that buffer.
 - Format check: `make fmt-check`
 - Lint: `make lint`
 - Test: `make test`
+
+For parser changes, run `make test-file FILE=tests/parser_targets_spec.lua` and
+`make test-file FILE=tests/parser_spec.lua` first. Optional parsers and queries
+can be supplied via `COMMENT_TRANSLATE_TEST_RTP=/path/to/runtime`. Real-parser
+cases reported as `Pending` are unverified, even if also counted as `Success`.
 
 ## License
 
