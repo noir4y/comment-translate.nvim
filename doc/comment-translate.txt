@@ -9,7 +9,7 @@ A Neovim plugin for translating comments, strings, and selected text.
 
 REQUIREMENTS                                    *comment-translate-requirements*
 
-- Neovim 0.8+
+- Neovim 0.10+
 - plenary.nvim (required)
 - Tree-sitter parser support for the languages you want to inspect
   (recommended)

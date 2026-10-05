@@ -1,7 +1,7 @@
 # comment-translate.nvim
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Neovim](https://img.shields.io/badge/Neovim-%3E=0.8-blue)](https://neovim.io)
+[![Neovim](https://img.shields.io/badge/Neovim-%3E=0.10-blue)](https://neovim.io)
 
 Translate comments and strings directly in Neovim using hover or immersive inline views.
 Supports classic translation APIs as well as LLM backends, including fully local models via Ollama.
@@ -38,7 +38,7 @@ For sensitive repositories, local Ollama models are the recommended setup.
 
 ## Requirements
 
-- Neovim 0.8+
+- Neovim 0.10+
 - `curl`
 - [plenary.nvim](https://github.com/nvim-lua/plenary.nvim) (required)
 - Tree-sitter parser support for the languages you want to inspect (recommended)

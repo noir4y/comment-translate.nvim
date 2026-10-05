@@ -9,6 +9,7 @@ describe('health', function()
   local original_health
   local original_get_parser
   local original_treesitter
+  local original_has
   local original_env = {}
 
   local function restore_env()
@@ -49,6 +50,7 @@ describe('health', function()
     health_bufnr = vim.api.nvim_create_buf(false, true)
     original_treesitter = vim.treesitter
     original_get_parser = vim.treesitter.get_parser
+    original_has = vim.fn.has
     health.set_target_bufnr(nil)
 
     captured = {
@@ -79,6 +81,7 @@ describe('health', function()
     vim.health = original_health
     vim.treesitter = original_treesitter
     vim.treesitter.get_parser = original_get_parser
+    vim.fn.has = original_has
     health.set_target_bufnr(nil)
     if original_bufnr and vim.api.nvim_buf_is_valid(original_bufnr) then
       vim.api.nvim_set_current_buf(original_bufnr)
@@ -91,6 +94,26 @@ describe('health', function()
     end
     restore_env()
   end)
+
+  for _, supported in ipairs({ true, false }) do
+    it(
+      'reports ' .. (supported and 'supported' or 'unsupported') .. ' Neovim versions against 0.10',
+      function()
+        vim.fn.has = function(feature)
+          if feature == 'nvim-0.10' then
+            return supported and 1 or 0
+          end
+          return original_has(feature)
+        end
+        health.check()
+        if supported then
+          assert.is_true(contains_message(captured.ok, 'Neovim version is 0%.10 or later'))
+        else
+          assert.is_true(contains_message(captured.error, 'Neovim 0%.10%+ is required'))
+        end
+      end
+    )
+  end
 
   it('should report parser availability for the requested buffer filetype', function()
     vim.bo[bufnr].filetype = 'lua'
