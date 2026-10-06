@@ -10,6 +10,7 @@ describe('parser target request boundary', function()
   local language_tree_api = require('vim.treesitter.languagetree')
   local original_get_injections, original_contains, original_tree_for_range, original_pairs
   local original_query_get, query_overrides
+  local original_get_string_parser, recovered_parser
 
   local function query(lang, text)
     query_overrides[lang] = query_api.parse(lang, text)
@@ -82,7 +83,7 @@ describe('parser target request boundary', function()
   end
 
   local function expect_child(lang)
-    local child = original_get_parser(bufnr):children()[lang]
+    local child = (recovered_parser or original_get_parser(bufnr)):children()[lang]
     assert.is_not_nil(child)
     assert.is_not_nil(next(child:trees()))
   end
@@ -105,6 +106,12 @@ describe('parser target request boundary', function()
     original_tree_for_range = language_tree_api.tree_for_range
     original_pairs = pairs
     original_query_get = query_api.get
+    original_get_string_parser = vim.treesitter.get_string_parser
+    recovered_parser = nil
+    vim.treesitter.get_string_parser = function(...)
+      recovered_parser = original_get_string_parser(...)
+      return recovered_parser
+    end
     -- Scope injection overrides to this case. v0.10 query.set cannot unset a
     -- query with nil, so do not alter its persistent explicit-query table.
     query_api.get = function(lang, name)
@@ -158,6 +165,7 @@ describe('parser target request boundary', function()
     pcall(vim.api.nvim_del_augroup_by_name, 'CommentTranslateHover')
     commands.cleanup_buffer(bufnr)
     query_api.get = original_query_get
+    vim.treesitter.get_string_parser = original_get_string_parser
     vim.treesitter.get_parser = original_get_parser
     vim.schedule = original_schedule
     uv.new_timer = original_new_timer
@@ -2869,5 +2877,594 @@ describe('parser target request boundary', function()
     local regex = require('comment-translate.parser.regex')
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { '"hello" outside' })
     assert.is_nil(regex.get_string_at_position(bufnr, 0, 2, { 0, 0, 0, 6 }))
+  end)
+  for _, form in ipairs({
+    { command = 'python', lang = 'python', node = 'python_statement' },
+    { command = 'python3', lang = 'python', node = 'python_statement' },
+    { command = 'py3', lang = 'python', node = 'python_statement' },
+    { command = 'python3 << trim EOF', header = true, lang = 'python', node = 'python_statement' },
+    { command = 'py3 << trim EOF', header = true, lang = 'python', node = 'python_statement' },
+    { command = 'ruby', lang = 'ruby', node = 'ruby_statement' },
+  }) do
+    for _, profile in ipairs({
+      'parser only',
+      'injection query',
+      'native query',
+      'missing injected parser',
+    }) do
+      describe('Vim heredoc ' .. form.command .. ' ' .. profile, function()
+        local function embedded(lines, row, col)
+          if not require_language('vim') or not require_language(form.lang) then
+            return false
+          end
+          if profile ~= 'native query' then
+            local content = vim_has_body() and '(script (body) @injection.content)'
+              or '(chunk) @injection.content'
+            local language = profile == 'missing injected parser' and 'comment_translate_missing'
+              or form.lang
+            query(
+              'vim',
+              profile == 'parser only' and ''
+                or '('
+                  .. form.node
+                  .. ' '
+                  .. content
+                  .. ' (#set! injection.language "'
+                  .. language
+                  .. '"))'
+            )
+          end
+          fixture('vim', lines, row, col)
+          vim.bo[bufnr].commentstring = '" %s'
+          return true
+        end
+        local function block(content)
+          return { (form.header and form.command or form.command .. ' << EOF'), content, 'EOF' }
+        end
+        local function parsed_child()
+          if profile == 'injection query' or profile == 'native query' then
+            expect_child(form.lang)
+          end
+        end
+        it('preserves a comment on first hover', function()
+          if not embedded(block('# こんにちは'), 2, 3) then
+            return
+          end
+          request('hover')
+          expect_text('こんにちは')
+          parsed_child()
+        end)
+        it('preserves a comment with immersive first', function()
+          if not embedded(block('# こんにちは')) then
+            return
+          end
+          commands.enable_immersive(bufnr)
+          expect_text('こんにちは')
+          parsed_child()
+        end)
+        it('preserves an enabled string on first hover', function()
+          if not embedded(block('value = "こんにちは"'), 2, 10) then
+            return
+          end
+          request('hover')
+          expect_text('こんにちは')
+          parsed_child()
+        end)
+        it('preserves a comment at the insertion boundary', function()
+          vim.o.virtualedit = 'onemore'
+          local line = '# こんにちは'
+          if not embedded(block(line), 2, #line) then
+            return
+          end
+          request('insert')
+          expect_text('こんにちは')
+          parsed_child()
+        end)
+        it('preserves comment punctuation', function()
+          if not embedded(block('# % growth'), 2, 3) then
+            return
+          end
+          request('hover')
+          expect_text('% growth')
+          calls = {}
+          commands.enable_immersive(bufnr)
+          expect_text('% growth')
+        end)
+        it('does not send heredoc boundaries', function()
+          if not embedded(block('# hello'), 1, 0) then
+            return
+          end
+          request('hover')
+          vim.api.nvim_win_set_cursor(0, { 3, 0 })
+          request('hover')
+          assert.equals(0, #calls)
+        end)
+        it('honors disabled targets on first use', function()
+          config.setup({ targets = { comment = false, string = false } })
+          if not embedded(block('# "quoted"'), 2, 5) then
+            return
+          end
+          request('hover')
+          commands.enable_immersive(bufnr)
+          assert.equals(0, #calls)
+        end)
+        it('preserves adjacent host comments and strings', function()
+          if
+            not embedded({
+              '" host comment',
+              (form.header and form.command or form.command .. ' << EOF'),
+              '# child comment',
+              'EOF',
+              'let s = "host string"',
+            }, 1, 3)
+          then
+            return
+          end
+          request('hover')
+          expect_text('host comment')
+          calls = {}
+          vim.api.nvim_win_set_cursor(0, { 5, 10 })
+          request('hover')
+          expect_text('"host string"')
+          calls = {}
+          commands.enable_immersive(bufnr)
+          assert.equals(2, #calls)
+        end)
+        if profile == 'injection query' or profile == 'native query' then
+          it('does not reclassify a disabled string containing comment markers', function()
+            config.setup({ targets = { comment = true, string = false } })
+            if not embedded(block('value = "alpha # hidden"'), 2, 19) then
+              return
+            end
+            request('hover')
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            parsed_child()
+          end)
+          it('suppresses a parsed string with immersive as first operation', function()
+            config.setup({ targets = { comment = true, string = false } })
+            if not embedded(block('value = "alpha # hidden"')) then
+              return
+            end
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            parsed_child()
+          end)
+          it('does not reclassify a disabled comment containing quotes', function()
+            config.setup({ targets = { comment = false, string = true } })
+            vim.o.virtualedit = 'onemore'
+            local line = '# "quoted"'
+            if not embedded(block(line), 2, #line) then
+              return
+            end
+            request('insert')
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            parsed_child()
+          end)
+          it('reparses a comment edited into a disabled string', function()
+            config.setup({ targets = { comment = true, string = false } })
+            if not embedded(block('# hello'), 2, 3) then
+              return
+            end
+            request('hover')
+            expect_text('hello')
+            calls = {}
+            vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { 'value = "alpha # hidden"' })
+            vim.api.nvim_win_set_cursor(0, { 2, 19 })
+            request('hover')
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+          end)
+        else
+          it('does not let fallback block comments escape the body', function()
+            if
+              not embedded({
+                (form.header and form.command or form.command .. ' << EOF'),
+                '/*',
+                'EOF',
+                'outside code',
+                '*/',
+              })
+            then
+              return
+            end
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+          end)
+          it('does not join fallback blocks across heredocs', function()
+            if
+              not embedded({
+                (form.header and form.command or form.command .. ' << EOF'),
+                '/*',
+                'EOF',
+                (form.header and form.command or form.command .. ' << EOF'),
+                '*/',
+                'EOF',
+              })
+            then
+              return
+            end
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+          end)
+        end
+      end)
+    end
+  end
+
+  describe('Vim Python3 compatibility guards', function()
+    local function prepare(lines, row, col)
+      if not require_language('vim') or not require_language('python') then
+        return false
+      end
+      if not fixture('vim', lines, row, col) then
+        return false
+      end
+      vim.bo[bufnr].commentstring = '" %s'
+      return true
+    end
+
+    for _, command in ipairs({ 'python3', 'py3' }) do
+      for _, form in ipairs({
+        { name = 'default marker', open = command .. ' <<', close = '.', prefix = '', indent = '' },
+        {
+          name = 'no whitespace',
+          open = command .. '<<EOF',
+          close = 'EOF',
+          prefix = '',
+          indent = '',
+        },
+        {
+          name = 'trailing whitespace',
+          open = command .. ' << EOF  ',
+          close = 'EOF',
+          prefix = '',
+          indent = '',
+        },
+        {
+          name = 'trim without whitespace',
+          open = '  ' .. command .. '<<trim EOF',
+          close = '  EOF',
+          prefix = 'function! Example()',
+          indent = '    ',
+        },
+        {
+          name = 'trim trailing tab',
+          open = '\t' .. command .. ' << trim EOF\t',
+          close = '\tEOF',
+          prefix = 'function! Example()',
+          indent = '\t\t',
+        },
+        {
+          name = 'colon',
+          open = ':' .. command .. ' << EOF',
+          close = 'EOF',
+          prefix = '',
+          indent = '',
+        },
+        {
+          name = 'function',
+          open = '  ' .. command .. ' << EOF',
+          close = 'EOF',
+          prefix = 'function! Example()',
+          indent = '',
+        },
+        {
+          name = 'trim spaces',
+          open = '  ' .. command .. ' << trim EOF',
+          close = '  EOF',
+          prefix = 'function! Example()',
+          indent = '    ',
+        },
+        {
+          name = 'trim tabs',
+          open = '\t' .. command .. ' << trim EOF',
+          close = '\tEOF',
+          prefix = 'function! Example()',
+          indent = '\t\t',
+        },
+        {
+          name = 'trim default marker',
+          open = '  ' .. command .. ' << trim',
+          close = '  .',
+          prefix = 'function! Example()',
+          indent = '    ',
+        },
+      }) do
+        local function lines(body)
+          local result = { form.open, form.indent .. body, form.close }
+          if form.prefix ~= '' then
+            table.insert(result, 1, form.prefix)
+            table.insert(result, 'endfunction')
+          end
+          return result, form.prefix == '' and 2 or 3
+        end
+        for _, first in ipairs({ 'hover', 'immersive' }) do
+          it(
+            'preserves ' .. command .. ' ' .. form.name .. ' with ' .. first .. ' first',
+            function()
+              local input, row = lines('# こんにちは')
+              if not prepare(input, row, #form.indent + 3) then
+                return
+              end
+              local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+              if first == 'hover' then
+                request('hover')
+              else
+                commands.enable_immersive(bufnr)
+              end
+              expect_text('こんにちは')
+              expect_child('python')
+              assert.equals(tick, vim.api.nvim_buf_get_changedtick(bufnr))
+              assert.is_true(vim.deep_equal(input, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)))
+            end
+          )
+          it(
+            'suppresses a disabled string in '
+              .. command
+              .. ' '
+              .. form.name
+              .. ' with '
+              .. first
+              .. ' first',
+            function()
+              config.setup({ targets = { comment = true, string = false } })
+              local input, row = lines('value = "alpha # hidden"')
+              if not prepare(input, row, #form.indent + 19) then
+                return
+              end
+              if first == 'hover' then
+                request('hover')
+              else
+                commands.enable_immersive(bufnr)
+              end
+              assert.equals(0, #calls)
+              expect_child('python')
+            end
+          )
+        end
+        it('preserves insertion-byte boundaries in ' .. command .. ' ' .. form.name, function()
+          vim.o.virtualedit = 'onemore'
+          local input, row = lines('# こんにちは')
+          if not prepare(input, row, #input[row]) then
+            return
+          end
+          request('insert')
+          expect_text('こんにちは')
+          expect_child('python')
+        end)
+      end
+    end
+
+    it('does not normalize a fake header inside a Python heredoc string', function()
+      config.setup({ targets = { comment = true, string = false } })
+      local input =
+        { 'python3 << EOF', 'value = """', 'py3 << INNER', '# hidden', 'INNER', '"""', 'EOF' }
+      if not prepare(input, 4, 3) then
+        return
+      end
+      local source
+      local factory = vim.treesitter.get_string_parser
+      vim.treesitter.get_string_parser = function(text, ...)
+        source = text
+        return factory(text, ...)
+      end
+      request('hover')
+      commands.enable_immersive(bufnr)
+      assert.equals(0, #calls)
+      assert.is_true(source:find('py3 << INNER', 1, true) ~= nil)
+      expect_child('python')
+    end)
+
+    for _, host in ipairs({ 'comment', 'string', 'heredoc' }) do
+      it('does not normalize a fake Python3 header in a host ' .. host, function()
+        local input = host == 'comment' and { '" python3 << trim EOF' }
+          or host == 'string' and { 'let value = "py3 << EOF"' }
+          or { 'let value =<< END', 'py3 << EOF', '# hidden', 'EOF', 'END' }
+        if not prepare(input) then
+          return
+        end
+        local count = 0
+        local factory = vim.treesitter.get_string_parser
+        vim.treesitter.get_string_parser = function(...)
+          count = count + 1
+          return factory(...)
+        end
+        request('hover')
+        commands.enable_immersive(bufnr)
+        assert.equals(0, count)
+      end)
+    end
+
+    it('reuses the compatibility parser until text or the host parser changes', function()
+      if not prepare({ 'py3 << EOF', '# original', 'EOF' }, 2, 3) then
+        return
+      end
+      local count = 0
+      local factory = vim.treesitter.get_string_parser
+      vim.treesitter.get_string_parser = function(...)
+        count = count + 1
+        return factory(...)
+      end
+      request('hover')
+      expect_text('original')
+      calls = {}
+      commands.enable_immersive(bufnr)
+      expect_text('original')
+      calls = {}
+      request('hover')
+      expect_text('original')
+      calls = {}
+      assert.equals(1, count)
+      vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { '# changed' })
+      request('hover')
+      expect_text('changed')
+      calls = {}
+      assert.equals(2, count)
+      -- A parser replacement with unchanged bytes must not reuse the old view.
+      local input = table.concat(vim.api.nvim_buf_get_lines(bufnr, 0, -1, false), '\n') .. '\n'
+      local replacement = original_get_string_parser(input, 'vim')
+      vim.treesitter.get_parser = function()
+        return replacement
+      end
+      request('hover')
+      expect_text('changed')
+      assert.equals(3, count)
+    end)
+
+    it('keeps compatibility parsers separate across buffer wipeout', function()
+      if not prepare({ 'python3 << EOF', '# original', 'EOF' }, 2, 3) then
+        return
+      end
+      request('hover')
+      expect_text('original')
+      calls = {}
+      commands.cleanup_buffer(bufnr)
+      vim.api.nvim_buf_delete(bufnr, { force = true })
+      bufnr = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_set_current_buf(bufnr)
+      recovered_parser = nil
+      if not prepare({ 'python3 << EOF', '# next buffer', 'EOF' }, 2, 3) then
+        return
+      end
+      request('hover')
+      expect_text('next buffer')
+      expect_child('python')
+    end)
+
+    for _, header in ipairs({ 'python << EOF', 'python3 << EOF' }) do
+      it('does not retain a released host parser for ' .. header, function()
+        if not prepare({ header, '# hidden' }, 2, 3) then
+          return
+        end
+        local function release_host()
+          local host = original_get_string_parser(header .. '\n# hidden\n', 'vim')
+          vim.treesitter.get_parser = function()
+            return host
+          end
+          request('hover')
+          vim.treesitter.get_parser = original_get_parser
+          return setmetatable({ host }, { __mode = 'v' })
+        end
+        local weak = release_host()
+        collectgarbage('collect')
+        collectgarbage('collect')
+        assert.is_true(weak[1] == nil)
+      end)
+    end
+
+    for _, failure in ipairs({ 'construction', 'parse error', 'missing tree', 'unproven boundary' }) do
+      it(
+        'withholds requests after compatibility ' .. failure .. ' without revealing details',
+        function()
+          if not prepare({ 'python3 << EOF', 'value = "# hidden"', 'EOF' }, 2, 11) then
+            return
+          end
+          local attempts = 0
+          vim.treesitter.get_string_parser = function()
+            attempts = attempts + 1
+            if failure == 'construction' then
+              error('private fixture details')
+            end
+            if failure == 'unproven boundary' then
+              return original_get_parser(bufnr)
+            end
+            return {
+              set_included_regions = function() end,
+              parse = function()
+                if failure == 'parse error' then
+                  error('private fixture details')
+                end
+                return {}
+              end,
+            }
+          end
+          request('hover')
+          commands.enable_immersive(bufnr)
+          assert.equals(0, #calls)
+          assert.equals(1, attempts)
+          for _, message in ipairs(notifications) do
+            assert.is_nil(message:find('private fixture details', 1, true))
+          end
+        end
+      )
+    end
+
+    for _, ending in ipairs({ 'missing', 'trailing space', 'wrong trim indentation' }) do
+      it('withholds an unproven Python3 terminator: ' .. ending, function()
+        local input = ending == 'wrong trim indentation'
+            and { '  py3 << trim EOF', '    # hidden', ' EOF' }
+          or { 'python3 << EOF', '# hidden' }
+        if ending == 'trailing space' then
+          table.insert(input, 'EOF ')
+        end
+        if not prepare(input, 2, 3) then
+          return
+        end
+        request('hover')
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+        assert.is_nil(recovered_parser)
+      end)
+    end
+
+    it('keeps a parser that already recognizes the Python3 script shape', function()
+      if not prepare({ 'python3 << EOF', '# original', 'EOF' }, 2, 3) then
+        return
+      end
+      local recognized = original_get_string_parser('python  << EOF\n# original\nEOF\n', 'vim')
+      vim.treesitter.get_parser = function()
+        return recognized
+      end
+      request('hover')
+      expect_text('original')
+      assert.is_nil(recovered_parser)
+      assert.is_not_nil(next(recognized:children().python:trees()))
+    end)
+  end)
+
+  describe('Vim Python3 parser configuration', function()
+    it('preserves custom injection options', function()
+      if not require_language('vim') or not require_language('python') then
+        return
+      end
+      fixture('vim', { 'py3 << EOF', '# hello', 'EOF' }, 2, 3)
+      vim.bo[bufnr].commentstring = '" %s'
+      local host = original_get_string_parser(
+        'py3 << EOF\n# hello\nEOF\n',
+        'vim',
+        { injections = { vim = '' } }
+      )
+      vim.treesitter.get_parser = function()
+        return host
+      end
+      request('hover')
+      expect_text('hello')
+      assert.is_not_nil(recovered_parser)
+      assert.is_nil(recovered_parser:children().python)
+    end)
+
+    it('preserves restricted root coverage', function()
+      if not require_language('vim') or not require_language('python') then
+        return
+      end
+      fixture('vim', { 'py3 << EOF', '# hello', 'EOF', '" outside' }, 2, 3)
+      vim.bo[bufnr].commentstring = '" %s'
+      local host = original_get_string_parser('py3 << EOF\n# hello\nEOF\n" outside\n', 'vim')
+      vim.treesitter.get_parser = function()
+        return host
+      end
+      request('hover')
+      expect_text('hello')
+      calls = {}
+      host:set_included_regions({ { { 0, 0, 3, 0 } } })
+      commands.enable_immersive(bufnr)
+      expect_text('hello')
+      calls = {}
+      vim.api.nvim_win_set_cursor(0, { 4, 3 })
+      request('hover')
+      assert.equals(0, #calls)
+    end)
   end)
 end)

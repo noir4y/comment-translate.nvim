@@ -19,6 +19,8 @@ return {
     'markdown_inline',
     'nix',
     'php',
+    'python',
+    'ruby',
     'scss',
     'sql',
     'swift',

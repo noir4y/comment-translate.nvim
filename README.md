@@ -146,6 +146,14 @@ A child owned by another parent does not suppress fallback in a sibling tree.
 Targets spanning disjoint combined injection regions are not submitted, because
 extracting their contiguous text could include intervening host code.
 
+In Vim buffers, `python3` and `py3` heredocs, including `trim`, are also detected
+with older Vim grammars. Detection preserves the buffer text and byte positions.
+The closing marker must be confirmed: with `trim`, its indentation must match
+the opening command's indentation exactly, including tabs. Without `trim`, the
+marker must occupy its own unindented line. A missing marker or a failed
+compatibility parse withholds hover and immersive requests for that buffer
+instead of retrying with whole-buffer regex fallback.
+
 Regex detection is approximate and can mistake delimiters inside strings for
 comments. Install the relevant parsers and injection queries for more precise
 detection; target settings alone cannot resolve ambiguous syntax in unparsed text.
@@ -258,7 +266,7 @@ parsers, load failures, and pending cases fail strict tests.
 Setup requires git, curl, gzip, tar, a C compiler, and Node (CI uses Node 22).
 It fetches fixed test-only nvim-treesitter tooling, its locked grammar revisions
 and matching queries/helpers, and Tree-sitter CLI 0.25.10 for Swift generation with ABI 14.
-All 23 fixture languages are installed under `/tmp/comment-translate-test-deps`
+All 25 fixture languages are installed under `/tmp/comment-translate-test-deps`
 by default; override this with `TEST_DEPS_DIR`. Personal parser installations
 are excluded from strict tests, and setup does not install into your Neovim
 configuration. These are development dependencies only; the plugin still does

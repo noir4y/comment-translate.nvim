@@ -57,6 +57,175 @@ local quoted_node_types = {
   literal = true,
 }
 
+-- A parser is released with its buffer; do not retain it through this cache.
+local python3_cache = setmetatable({}, { __mode = 'k' })
+
+local function child_of_type(node, kind)
+  for child in node:iter_children() do
+    if child:type() == kind then
+      return child
+    end
+  end
+end
+
+local function recover_python3(bufnr, parser, trees)
+  if not parser.lang or parser:lang() ~= 'vim' then
+    return parser
+  end
+  local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+  local regions = parser:included_regions()
+  local cached = python3_cache[parser]
+  if
+    cached
+    and cached.tick == tick
+    and vim.deep_equal(cached.regions, regions)
+    and cached.query == parser._injection_query
+  then
+    return cached.parser or parser, cached.blocked
+  end
+  local function finish(result, blocked)
+    python3_cache[parser] = {
+      tick = tick,
+      parser = result ~= parser and result or nil,
+      blocked = blocked,
+      regions = vim.deepcopy(regions),
+      query = parser._injection_query,
+    }
+    return result, blocked
+  end
+
+  local candidates = {}
+  local function inspect(node)
+    local kind = node:type()
+    -- Host strings/comments and already recognized script bodies are opaque.
+    if
+      kind == 'script'
+      or kind == 'heredoc'
+      or comment_node_types[kind]
+      or string_node_types[kind]
+      or quoted_node_types[kind]
+    then
+      return
+    end
+    if kind == 'python_statement' and not child_of_type(node, 'script') then
+      local row, col = node:start()
+      local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+      local content = (line or ''):sub(col + 1)
+      local command, space, tail = content:match('^([%a%d]+)([ \t]*)<<[ \t]*(.-)[ \t]*$')
+      if command == 'python3' or command == 'py3' then
+        local trimmed = tail == 'trim' or tail:match('^trim[ \t]+') ~= nil
+        local marker_text = trimmed and tail:sub(5):match('^[ \t]*(.-)[ \t]*$') or tail
+        local trim_start = trimmed and content:find('trim', #command + #space + 3, true)
+        table.insert(candidates, {
+          row = row,
+          col = col,
+          digit = col + #command,
+          trailing = #(content:match('[ \t]*$')),
+          marker = marker_text == '' and '.' or marker_text,
+          indent = trimmed and line:match('^[ \t]*') or '',
+          trim_start = trim_start and col + trim_start,
+        })
+      end
+    end
+    for child in node:iter_children() do
+      if child:named() then
+        inspect(child)
+      end
+    end
+  end
+  for _, tree in pairs(trees) do
+    inspect(tree:root())
+  end
+  if #candidates == 0 then
+    return finish(parser)
+  end
+  table.sort(candidates, function(a, b)
+    return a.row < b.row
+  end)
+  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  local accepted, last_close = {}, -1
+  for _, candidate in ipairs(candidates) do
+    -- A malformed host tree can misclassify code inside an earlier heredoc.
+    if candidate.row > last_close then
+      if candidate.marker:find('%s') then
+        return finish(parser, true)
+      end
+      local closing
+      for index = candidate.row + 2, #lines do
+        if lines[index] == candidate.indent .. candidate.marker then
+          closing = index - 1
+          break
+        end
+      end
+      if not closing then
+        return finish(parser, true)
+      end
+      candidate.closing = closing
+      last_close = closing
+      table.insert(accepted, candidate)
+      local line = lines[candidate.row + 1]
+      line = line:sub(1, candidate.digit - 1) .. ' ' .. line:sub(candidate.digit + 1)
+      if candidate.trim_start then
+        line = line:sub(1, candidate.trim_start - 1) .. '    ' .. line:sub(candidate.trim_start + 4)
+      end
+      -- Old scanners include trailing header whitespace in the end marker.
+      -- Move that trivia into command spacing without changing line length.
+      if candidate.trailing > 0 then
+        line = line:sub(1, candidate.digit)
+          .. string.rep(' ', candidate.trailing)
+          .. line:sub(candidate.digit + 1, #line - candidate.trailing)
+      end
+      lines[candidate.row + 1] = line
+    end
+  end
+
+  -- Only headers change. All target text and byte positions stay intact.
+  local created, shadow =
+    pcall(vim.treesitter.get_string_parser, table.concat(lines, '\n') .. '\n', 'vim', parser._opts)
+  if not created then
+    return finish(parser, true)
+  end
+  local parsed, shadow_trees = pcall(function()
+    -- Keep custom injection options and root coverage from the original parser.
+    -- An explicit empty region differs from default whole-source coverage on
+    -- newer Neovim versions: it can discard child injection boundaries.
+    if not vim.deep_equal(regions, { {} }) then
+      shadow:set_included_regions(vim.deepcopy(regions))
+    end
+    return shadow:parse(true)
+  end)
+  if not parsed or not shadow_trees or not shadow_trees[1] then
+    return finish(parser, true)
+  end
+  local confirmed = {}
+  local function confirm(node)
+    if node:type() == 'python_statement' then
+      local script = child_of_type(node, 'script')
+      local ending = script and child_of_type(script, 'endmarker')
+      if ending and not script:has_error() then
+        local row, col = node:start()
+        local closing = ending:start()
+        confirmed[row] = { col = col, closing = closing }
+      end
+    end
+    for child in node:iter_children() do
+      if child:named() then
+        confirm(child)
+      end
+    end
+  end
+  for _, tree in pairs(shadow_trees) do
+    confirm(tree:root())
+  end
+  for _, candidate in ipairs(accepted) do
+    local proof = confirmed[candidate.row]
+    if not proof or proof.col ~= candidate.col or proof.closing ~= candidate.closing then
+      return finish(parser, true)
+    end
+  end
+  return finish(shadow)
+end
+
 local function get_parser(bufnr)
   local ok, parser = pcall(vim.treesitter.get_parser, bufnr)
   if not ok or not parser then
@@ -67,7 +236,16 @@ local function get_parser(bufnr)
   if not parsed or not trees or not trees[1] or not trees[1]:root() then
     return nil
   end
-  return parser
+  local recovered, result, blocked = pcall(recover_python3, bufnr, parser, trees)
+  -- A compatibility failure must never reactivate whole-buffer regex fallback.
+  if not recovered then
+    python3_cache[parser] = {
+      tick = vim.api.nvim_buf_get_changedtick(bufnr),
+      blocked = true,
+    }
+    return parser, true
+  end
+  return result, blocked
 end
 
 local function find_target(node)
@@ -396,7 +574,10 @@ end
 ---@param col number
 ---@return string?, string?, boolean handled, table? fallback_range
 function M.get_text_at_position(bufnr, row, col)
-  local parser = get_parser(bufnr)
+  local parser, blocked = get_parser(bufnr)
+  if blocked then
+    return nil, nil, true
+  end
   if not parser then
     return nil, nil, false
   end
@@ -525,7 +706,10 @@ function M.get_all_comments(bufnr)
   if not config.config.targets.comment then
     return {}, true, {}
   end
-  local parser = get_parser(bufnr)
+  local parser, blocked = get_parser(bufnr)
+  if blocked then
+    return {}, true, {}
+  end
   if not parser then
     return {}, false, {}
   end
