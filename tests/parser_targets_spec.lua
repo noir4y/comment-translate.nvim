@@ -613,6 +613,212 @@ describe('parser target request boundary', function()
     end)
   end
 
+  for _, embedded in ipairs({ false, true }) do
+    for _, form in ipairs({
+      { name = 'simple', body = 'こんにちは // # $name' },
+      { name = 'braced', body = 'こんにちは // # {$name}' },
+      { name = 'quoted subscript', body = 'こんにちは // # {$names["key"]}' },
+      { name = 'multiline', body = 'こんにちは // # \n$name' },
+      { name = 'escaped quotes', body = 'こんにちは \\"quoted\\" // # $name' },
+      { name = 'binary', body = 'こんにちは // # $name', binary = 'b' },
+      { name = 'uppercase binary', body = 'こんにちは // # $name', binary = 'B' },
+    }) do
+      for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+        it(
+          'preserves bounded PHP interpolation via '
+            .. flow
+            .. ' (embedded='
+            .. tostring(embedded)
+            .. ', form='
+            .. form.name
+            .. ')',
+          function()
+            if not require_language('php') or (embedded and not require_language('markdown')) then
+              return
+            end
+            query('php', '')
+            if embedded then
+              query(
+                'markdown',
+                '(fenced_code_block (info_string) @injection.language'
+                  .. ' (code_fence_content) @injection.content (#set! injection.include-children))'
+              )
+            end
+            local body = form.body
+            local prefix = '<?php $label = "前"; $x = ' .. (form.binary or '')
+            local lines =
+              vim.split(prefix .. '"' .. body .. '"; $next = "outside";', '\n', { plain = true })
+            local body_lines = vim.split(body, '\n', { plain = true })
+            if embedded then
+              table.insert(lines, 1, '```php')
+              table.insert(lines, '```')
+            end
+            local row = embedded and 2 or 1
+            if not fixture(embedded and 'markdown' or 'php', lines, row, #prefix) then
+              return
+            end
+            vim.bo[bufnr].commentstring = embedded and '<!-- %s -->' or '// %s'
+            config.setup({ targets = { comment = false, string = true } })
+            -- Opening quote on first use must resolve the encapsed_string node.
+            request(flow)
+            expect_text(body)
+            local root = original_get_parser(bufnr)
+            local language_tree = embedded and root:children().php or root
+            assert.is_not_nil(language_tree)
+            local tree = language_tree:tree_for_range({ row - 1, #prefix, row - 1, #prefix + 1 })
+            assert.is_false(tree:root():has_error())
+            local node = tree:root():named_descendant_for_range(row - 1, #prefix, row - 1, #prefix)
+            assert.equals('encapsed_string', node:type())
+            local variable
+            for index, line in ipairs(body_lines) do
+              local col = line:find('$', 1, true)
+              if col then
+                variable = { row + index - 1, index == 1 and #prefix + col or col - 1 }
+                break
+              end
+            end
+            local end_row = row + #body_lines - 1
+            local end_col = #body_lines[#body_lines] + (#body_lines == 1 and #prefix + 1 or 0)
+            local positions = { { row, #prefix }, variable, { end_row, end_col } }
+            for _, position in ipairs(positions) do
+              calls = {}
+              vim.api.nvim_win_set_cursor(0, position)
+              request(flow)
+              expect_text(body)
+            end
+            calls = {}
+            config.setup({ targets = { comment = true, string = true } })
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            if form.name == 'quoted subscript' then
+              -- Preserve the closest target for literal content and inner strings.
+              vim.api.nvim_win_set_cursor(0, { row, #prefix + 1 })
+              request(flow)
+              expect_text('こんにちは // #')
+              calls = {}
+              vim.api.nvim_win_set_cursor(0, { row, #prefix + body:find('"key"', 1, true) })
+              request(flow)
+              expect_text('key')
+              calls = {}
+            end
+            for _, comment in ipairs({ true, false }) do
+              config.setup({ targets = { comment = comment, string = false } })
+              calls = {}
+              for _, position in ipairs(positions) do
+                vim.api.nvim_win_set_cursor(0, position)
+                request(flow)
+              end
+              commands.enable_immersive(bufnr)
+              assert.equals(0, #calls)
+            end
+            config.setup({ targets = { comment = true, string = true } })
+            for _, position in ipairs({ { row, 0 }, { end_row, end_col + 1 } }) do
+              vim.api.nvim_win_set_cursor(0, position)
+              request(flow)
+            end
+            assert.equals(0, #calls)
+            vim.api.nvim_buf_set_lines(bufnr, row - 1, row, false, { '<?php // "quoted $name"' })
+            vim.api.nvim_win_set_cursor(0, { row, 18 })
+            config.setup({ targets = { comment = false, string = true } })
+            request(flow)
+            commands.update_immersive(bufnr)
+            assert.equals(0, #calls)
+          end
+        )
+      end
+    end
+  end
+
+  for _, embedded in ipairs({ false, true }) do
+    for _, body in ipairs({ 'こんにちは // # {$names["key"]}', 'こんにちは // # \n$name' }) do
+      it(
+        'suppresses PHP strings on first-use immersive (embedded='
+          .. tostring(embedded)
+          .. ', multiline='
+          .. tostring(body:find('\n', 1, true) ~= nil)
+          .. ')',
+        function()
+          if not require_language('php') or (embedded and not require_language('markdown')) then
+            return
+          end
+          query('php', '')
+          if embedded then
+            query(
+              'markdown',
+              '(fenced_code_block (info_string) @injection.language'
+                .. ' (code_fence_content) @injection.content (#set! injection.include-children))'
+            )
+          end
+          local lines = vim.split('<?php $x = "' .. body .. '";', '\n', { plain = true })
+          if embedded then
+            table.insert(lines, 1, '```php')
+            table.insert(lines, '```')
+          end
+          if not fixture(embedded and 'markdown' or 'php', lines) then
+            return
+          end
+          config.setup({ targets = { comment = true, string = true } })
+          commands.enable_immersive(bufnr)
+          assert.equals(0, #calls)
+          local root = original_get_parser(bufnr)
+          local language_tree = embedded and root:children().php or root
+          assert.is_not_nil(language_tree)
+          assert.is_true(next(language_tree:trees()) ~= nil)
+          for _, tree in pairs(language_tree:trees()) do
+            assert.is_false(tree:root():has_error())
+          end
+        end
+      )
+    end
+  end
+
+  for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+    for _, form in ipairs({
+      { name = 'missing closing quote', body = 'こんにちは {$names["key"]};' },
+      { name = 'invalid interpolation', body = 'こんにちは {$name[}";' },
+    }) do
+      it('rejects incomplete PHP strings via ' .. flow .. ' (' .. form.name .. ')', function()
+        if not require_language('php') then
+          return
+        end
+        query('php', '')
+        local prefix = '<?php $x = '
+        if not fixture('php', { prefix .. '"' .. form.body }, 1, #prefix) then
+          return
+        end
+        config.setup({ targets = { comment = true, string = true } })
+        request(flow)
+        assert.equals(0, #calls)
+        local root = original_get_parser(bufnr):trees()[1]:root()
+        assert.is_true(root:has_error())
+        vim.api.nvim_win_set_cursor(0, { 1, #prefix + form.body:find('$', 1, true) })
+        request(flow)
+        assert.equals(0, #calls)
+        config.setup({ targets = { comment = false, string = false } })
+        request(flow)
+        assert.equals(0, #calls)
+      end)
+    end
+  end
+
+  for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+    it('keeps PHP interpolation fallback available without a parser via ' .. flow, function()
+      vim.treesitter.get_parser = function()
+        error('parser unavailable')
+      end
+      vim.bo[bufnr].filetype = 'php'
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { '<?php $x = "Hello $name";' })
+      vim.api.nvim_win_set_cursor(0, { 1, 17 })
+      config.setup({ targets = { comment = false, string = true } })
+      request(flow)
+      expect_text('Hello $name')
+      calls = {}
+      config.setup({ targets = { comment = true, string = false } })
+      request(flow)
+      assert.equals(0, #calls)
+    end)
+  end
+
   for _, form in ipairs({
     { ft = 'typescript', prefix = 'type Value = ', suffix = ';' },
     { ft = 'astro', prefix = '<div title=', suffix = ' />' },

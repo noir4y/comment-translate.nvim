@@ -27,6 +27,7 @@ local string_node_types = {
 local quoted_node_types = {
   char_literal = true,
   template_string = true,
+  encapsed_string = true,
   template_literal_type = true,
   attribute_backtick_string = true,
   raw_string_literal = true,
@@ -317,6 +318,12 @@ function M.get_text_at_position(bufnr, row, col)
         if not contained then
           return nil, nil, true
         end
+      end
+      if target:type() == 'encapsed_string' then
+        -- PHP interpolation may contain quotes and span lines. Its parser
+        -- already owns the complete string; do not rescan delimiters with regex.
+        local text = not target:has_error() and vim.treesitter.get_node_text(target, bufnr)
+        return text and text:match('^[bB]?"(.*)"$') or nil, 'string', true
       end
       if quoted_node_types[target:type()] then
         local text = regex.get_string_at_position(bufnr, row, col, { target:range() })

@@ -271,8 +271,15 @@ regex fallback remains available and uses the target settings.
 At an end-of-line insertion position, hover can resolve the preceding comment;
 this does not extend string detection beyond its node. Quoted-node extraction
 is restricted to the classified string node, including quoted content in
-Bash heredoc bodies, YAML block or plain string scalars, SQL literals, and
-Dockerfile JSON instruction arguments.
+Bash heredoc bodies, YAML block or plain string scalars, SQL literals,
+Dockerfile JSON instruction arguments, and PHP interpolated strings. With a PHP
+parser, hovering on an interpolation or its outer quote extracts the selected
+string node's complete content, including inner quotes and newlines. Outer quotes
+and an optional b/B prefix are removed; escape sequences remain unchanged.
+Literal fragments and strings inside an interpolation keep their existing
+nearest-node selection. Incomplete or erroneous selected string nodes are not
+extracted, and disabling targets.string suppresses extraction. Without a PHP
+parser, regex extraction remains line-based and may truncate nested quotes.
 
 Injected languages are parsed on first use. A host comment or string keeps its
 existing translation unit and target category, including strings used by
