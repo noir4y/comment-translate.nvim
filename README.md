@@ -242,15 +242,37 @@ also want parser availability checked for that buffer.
 
 ## Development
 
+- Setup test dependencies: `make deps`
 - Format: `make fmt`
 - Format check: `make fmt-check`
 - Lint: `make lint`
-- Test: `make test`
+- Quick tests: `make test`
+- Full tests with required real parsers: `make test-real-parsers`
 
-For parser changes, run `make test-file FILE=tests/parser_targets_spec.lua` and
-`make test-file FILE=tests/parser_spec.lua` first. Optional parsers and queries
-can be supplied via `COMMENT_TRANSLATE_TEST_RTP=/path/to/runtime`. Real-parser
-cases reported as `Pending` are unverified, even if also counted as `Success`.
+For parser changes, run
+`make test-real-parsers FILE=tests/parser_targets_spec.lua` and
+`make test-real-parsers FILE=tests/parser_spec.lua` first, then run the full strict
+suite. CI runs strict tests on Neovim 0.10.0, stable, and nightly. Missing required
+parsers, load failures, and pending cases fail strict tests.
+
+Setup requires git, curl, gzip, tar, a C compiler, and Node (CI uses Node 22).
+It fetches fixed test-only nvim-treesitter tooling, its locked grammar revisions
+and matching queries/helpers, and Tree-sitter CLI 0.25.10 for Swift generation with ABI 14.
+All 23 fixture languages are installed under `/tmp/comment-translate-test-deps`
+by default; override this with `TEST_DEPS_DIR`. Personal parser installations
+are excluded from strict tests, and setup does not install into your Neovim
+configuration. These are development dependencies only; the plugin still does
+not require nvim-treesitter or a Tree-sitter CLI at runtime. The first setup needs
+network access; subsequent runs reuse the fixed artifacts. Setup rejects foreign
+or stale query/helper cache entries; select a fresh `TEST_DEPS_DIR` in that case.
+Translation requests
+in tests use fakes and do not contact translation services.
+
+`make test-file FILE=tests/parser_targets_spec.lua` remains available for quick
+checks. Optional parsers and queries can be supplied via
+`COMMENT_TRANSLATE_TEST_RTP`. Cases reported as `Pending` are unverified, even
+if also counted as `Success`. Strict summaries report executed and pending counts
+separately. Use `NVIM=/path/to/nvim` to select a test executable.
 
 ## License
 

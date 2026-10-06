@@ -59,13 +59,15 @@ jobs:
           neovim: true
           version: ${{ matrix.neovim_version }}
 
-      - name: Clone plenary.nvim
-        run: git clone --depth 1 https://github.com/nvim-lua/plenary.nvim /tmp/plenary.nvim
+      - name: Setup Node for Swift grammar generation
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
 
       - name: Run tests
         run: |
           nvim --version
-          make test PLENARY_DIR=/tmp/plenary.nvim
+          make test-real-parsers PLENARY_DIR=/tmp/plenary.nvim
 
   docs:
     name: Generate Docs

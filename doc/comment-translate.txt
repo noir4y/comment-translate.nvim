@@ -305,6 +305,34 @@ Regex detection is approximate and can mistake delimiters inside strings for
 comments. Install the relevant parsers and injection queries for more precise
 detection; target settings alone cannot resolve ambiguous syntax in unparsed text.
 
+DEVELOPMENT                                     *comment-translate-development*
+
+Setup test dependencies with `make deps`. Run `make test-real-parsers` for the
+full strict suite, or use FILE=tests/parser_targets_spec.lua (or
+FILE=tests/parser_spec.lua) with that target for focused parser verification.
+CI runs strict tests on Neovim 0.10.0, stable, and nightly. Missing required
+parsers, load failures, and pending cases fail strict tests. Summaries report
+executed and pending counts separately.
+
+Setup requires git, curl, gzip, tar, a C compiler, and Node (CI uses Node 22).
+It fetches fixed test-only nvim-treesitter tooling, its locked grammar revisions
+and matching queries/helpers, and Tree-sitter CLI 0.25.10 for Swift generation
+with ABI 14.
+All 23 fixture languages are installed under /tmp/comment-translate-test-deps
+by default; override this with TEST_DEPS_DIR. Personal parser installations are
+excluded from strict tests. Setup does not install into your Neovim configuration.
+These are development dependencies only; the plugin does not require
+nvim-treesitter or a Tree-sitter CLI at runtime. Initial setup needs network
+access; subsequent runs reuse fixed artifacts. Setup rejects foreign or stale
+query/helper cache entries; select a fresh TEST_DEPS_DIR in that case.
+Translation requests in tests use fakes and do not contact translation services.
+
+Use `make test` or `make test-file FILE=tests/parser_targets_spec.lua` for quick
+checks. Optional parsers and queries can be supplied with
+COMMENT_TRANSLATE_TEST_RTP. Pending real-parser cases remain unverified even
+when also counted as Success. Use NVIM=/path/to/nvim to select a test executable.
+Other checks: `make fmt-check`, `make lint`, and `make docs`.
+
 TROUBLESHOOTING                                 *comment-translate-troubleshooting*
 
 Translation not working~

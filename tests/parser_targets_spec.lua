@@ -1,8 +1,4 @@
 ---@diagnostic disable: undefined-global
-local parser_runtime = os.getenv('COMMENT_TRANSLATE_TEST_RTP')
-if parser_runtime and parser_runtime ~= '' then
-  vim.opt.rtp:prepend(parser_runtime)
-end
 
 describe('parser target request boundary', function()
   local config, parser, commands, autocmds, ui, translate
@@ -23,6 +19,9 @@ describe('parser target request boundary', function()
     local load = language_api.add or language_api.require_language
     local ok, result, err = pcall(load, lang)
     if not ok or result == false or (result == nil and err ~= nil) then
+      if os.getenv('COMMENT_TRANSLATE_TEST_REQUIRE_PARSERS') == '1' then
+        error('Required real parser unavailable: ' .. lang)
+      end
       pending('real ' .. lang .. ' parser unavailable; compatibility unverified')
       return false
     end
@@ -80,6 +79,12 @@ describe('parser target request boundary', function()
     assert.equals(1, #calls)
     -- Keep source text out of assertion failure output.
     assert.is_true(calls[1] == expected)
+  end
+
+  local function expect_child(lang)
+    local child = original_get_parser(bufnr):children()[lang]
+    assert.is_not_nil(child)
+    assert.is_not_nil(next(child:trees()))
   end
 
   before_each(function()
@@ -923,6 +928,9 @@ describe('parser target request boundary', function()
               request('hover')
             end
             expect_text(body)
+            if profile == 'injection query' then
+              expect_child(form.lang)
+            end
             calls = {}
             config.setup({ targets = { comment = false, string = false } })
             request('hover')
@@ -1297,6 +1305,9 @@ describe('parser target request boundary', function()
         vim.bo[bufnr].commentstring = '<!-- %s -->'
         commands.enable_immersive(bufnr)
         expect_text('こんにちは')
+        if profile == 'injection query' then
+          expect_child(embedding.lang)
+        end
         calls = {}
         request('hover')
         expect_text('こんにちは')
@@ -1371,6 +1382,9 @@ describe('parser target request boundary', function()
           end
           request('hover')
           expect_text('こんにちは')
+          if profile == 'injection query' then
+            expect_child('lua')
+          end
           calls = {}
           commands.enable_immersive(bufnr)
           expect_text('こんにちは')
@@ -1382,6 +1396,9 @@ describe('parser target request boundary', function()
           end
           commands.enable_immersive(bufnr)
           expect_text('こんにちは')
+          if profile == 'injection query' then
+            expect_child('lua')
+          end
         end)
 
         it('preserves an embedded string on first use', function()
