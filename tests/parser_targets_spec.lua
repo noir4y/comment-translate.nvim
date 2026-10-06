@@ -458,6 +458,413 @@ describe('parser target request boundary', function()
     end
   end
 
+  for _, form in ipairs({
+    { ft = 'scss', kind = 'single_line_comment', commentstring = '// %s' },
+    { ft = 'css', kind = 'js_comment', commentstring = '/* %s */' },
+  }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+      for _, prefix in ipairs({ '', 'a { content: "あ"; } ' }) do
+        local position = prefix == '' and 'standalone' or 'inline'
+        it(
+          'preserves ' .. form.ft .. ' slash comments via ' .. flow .. ' (' .. position .. ')',
+          function()
+            if not require_language(form.ft) then
+              return
+            end
+            query(form.ft, '')
+            config.setup({ targets = { comment = true, string = false } })
+            if
+              not fixture(
+                form.ft,
+                { prefix .. '// hello', 'a { content: "// hidden"; }' },
+                1,
+                #prefix + 3
+              )
+            then
+              return
+            end
+            vim.bo[bufnr].commentstring = form.commentstring
+            request(flow)
+            expect_text('hello')
+            local tree = vim.treesitter.get_parser(bufnr):trees()[1]
+            assert.is_false(tree:root():has_error())
+            local node = tree:root():named_descendant_for_range(0, #prefix + 3, 0, #prefix + 3)
+            assert.equals(form.kind, node:type())
+
+            calls = {}
+            local body = 'こんにちは "quoted"'
+            local line = prefix .. '// ' .. body
+            vim.api.nvim_buf_set_lines(bufnr, 0, 1, false, { line })
+            request(flow)
+            expect_text(body)
+            calls = {}
+            vim.o.virtualedit = 'onemore'
+            vim.api.nvim_win_set_cursor(0, { 1, #line })
+            request(flow)
+            expect_text(body)
+
+            calls = {}
+            config.setup({ targets = { comment = false, string = true } })
+            vim.api.nvim_win_set_cursor(0, { 1, line:find('quoted', 1, true) - 1 })
+            request(flow)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = false, string = false } })
+            request(flow)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = true, string = false } })
+            vim.api.nvim_win_set_cursor(0, { 2, 16 })
+            request(flow)
+            assert.equals(0, #calls)
+            if prefix ~= '' then
+              vim.api.nvim_win_set_cursor(0, { 1, 0 })
+              request(flow)
+              assert.equals(0, #calls)
+            end
+            vim.api.nvim_buf_set_lines(bufnr, 0, 1, false, { '//' })
+            vim.api.nvim_win_set_cursor(0, { 1, 1 })
+            request(flow)
+            assert.equals(0, #calls)
+          end
+        )
+      end
+    end
+
+    it('preserves first-use ' .. form.ft .. ' slash comments in immersive mode', function()
+      if not require_language(form.ft) then
+        return
+      end
+      query(form.ft, '')
+      config.setup({ targets = { comment = true, string = false } })
+      if
+        not fixture(
+          form.ft,
+          { '// こんにちは', 'a { content: "あ"; } // inline', 'a { content: "// hidden"; }' }
+        )
+      then
+        return
+      end
+      vim.bo[bufnr].commentstring = form.commentstring
+      commands.enable_immersive(bufnr)
+      assert.equals(2, #calls)
+      assert.is_true(calls[1] == 'こんにちは')
+      assert.is_true(calls[2] == 'inline')
+      calls = {}
+      config.setup({ targets = { comment = false, string = true } })
+      commands.update_immersive(bufnr)
+      assert.equals(0, #calls)
+      config.setup({ targets = { comment = true, string = false } })
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { '// edited', '/* block */' })
+      commands.update_immersive(bufnr)
+      assert.equals(2, #calls)
+      assert.is_true(calls[1] == 'edited')
+      -- Preserve the base's block-comment unit under each native commentstring.
+      assert.is_true(calls[2] == (form.ft == 'scss' and '/* block */' or 'block'))
+      calls = {}
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'a { content: "// hidden"; }' })
+      commands.update_immersive(bufnr)
+      assert.equals(0, #calls)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { '//', '//   ' })
+      commands.update_immersive(bufnr)
+      assert.equals(0, #calls)
+    end)
+
+    it('preserves injected ' .. form.ft .. ' slash comment boundaries', function()
+      if not require_language(form.ft) or not require_language('html') then
+        return
+      end
+      query(form.ft, '')
+      query(
+        'html',
+        '(style_element (raw_text) @injection.content (#set! injection.language "'
+          .. form.ft
+          .. '"))'
+      )
+      config.setup({ targets = { comment = true, string = false } })
+      local body = 'こんにちは "quoted"'
+      if
+        not fixture(
+          'html',
+          { '<style>', '// ' .. body, 'a { content: "// hidden"; }', '</style>' },
+          2,
+          4
+        )
+      then
+        return
+      end
+      vim.bo[bufnr].commentstring = '<!-- %s -->'
+      commands.enable_immersive(bufnr)
+      expect_text(body)
+      calls = {}
+      request('hover')
+      expect_text(body)
+      assert.is_not_nil(vim.treesitter.get_parser(bufnr):children()[form.ft])
+      calls = {}
+      config.setup({ targets = { comment = false, string = true } })
+      vim.api.nvim_win_set_cursor(0, { 2, ('// ' .. body):find('quoted', 1, true) - 1 })
+      request('hover')
+      commands.update_immersive(bufnr)
+      assert.equals(0, #calls)
+      config.setup({ targets = { comment = true, string = false } })
+      for _, position in ipairs({ { 1, 1 }, { 3, 16 }, { 4, 1 } }) do
+        vim.api.nvim_win_set_cursor(0, position)
+        request('hover')
+      end
+      assert.equals(0, #calls)
+    end)
+  end
+
+  for _, form in ipairs({
+    { ft = 'typescript', prefix = 'type Value = ', suffix = ';' },
+    { ft = 'astro', prefix = '<div title=', suffix = ' />' },
+  }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+      it('preserves bounded ' .. form.ft .. ' backtick content via ' .. flow, function()
+        if not require_language(form.ft) then
+          return
+        end
+        query(form.ft, '')
+        local body = 'こんにちは -- # /* body'
+        local line = form.prefix .. '`' .. body .. '`' .. form.suffix
+        if not fixture(form.ft, { line }, 1, #form.prefix + 1) then
+          return
+        end
+        request(flow)
+        expect_text(body)
+        calls = {}
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+        config.setup({ targets = { comment = true, string = false } })
+        request(flow)
+        assert.equals(0, #calls)
+        config.setup({ targets = { comment = true, string = true } })
+        vim.api.nvim_win_set_cursor(0, { 1, 0 })
+        request(flow)
+        vim.api.nvim_win_set_cursor(0, { 1, #line - 1 })
+        request(flow)
+        assert.equals(0, #calls)
+        local edited = 'updated'
+        vim.api.nvim_buf_set_lines(
+          bufnr,
+          0,
+          -1,
+          false,
+          { form.prefix .. '`' .. edited .. '`' .. form.suffix }
+        )
+        vim.api.nvim_win_set_cursor(0, { 1, #form.prefix + 1 })
+        request(flow)
+        expect_text(edited)
+      end)
+    end
+  end
+
+  for _, form in ipairs({
+    {
+      ft = 'dockerfile',
+      open = 'RUN <<EOF',
+      close = 'EOF',
+      comment = '# ',
+      string_prefix = 'echo ',
+      lang = 'bash',
+      injection = '(run_instruction (heredoc_block) @injection.content)',
+    },
+    {
+      ft = 'astro',
+      open = '---',
+      close = '---',
+      comment = '// ',
+      string_prefix = 'const value = ',
+      lang = 'typescript',
+      injection = '(frontmatter (frontmatter_js_block) @injection.content)',
+    },
+  }) do
+    for _, profile in ipairs({ 'parser only', 'injection query', 'missing injected parser' }) do
+      for _, first in ipairs({ 'hover', 'immersive' }) do
+        it(
+          'restores bounded ' .. form.ft .. ' bodies with ' .. profile .. ' via ' .. first,
+          function()
+            if not require_language(form.ft) then
+              return
+            end
+            local lang = profile == 'missing injected parser' and 'comment_translate_missing'
+              or form.lang
+            if profile == 'injection query' and not require_language(lang) then
+              return
+            end
+            query(
+              form.ft,
+              profile == 'parser only' and ''
+                or '('
+                  .. form.injection
+                  .. ' (#set! injection.language "'
+                  .. lang
+                  .. '") (#set! injection.include-children))'
+            )
+            local body = 'こんにちは'
+            if
+              not fixture(
+                form.ft,
+                { form.open, form.comment .. body, form.close },
+                2,
+                #form.comment
+              )
+            then
+              return
+            end
+            vim.bo[bufnr].commentstring = form.ft == 'astro' and '<!-- %s -->' or '# %s'
+            if first == 'immersive' then
+              commands.enable_immersive(bufnr)
+            else
+              request('hover')
+            end
+            expect_text(body)
+            calls = {}
+            config.setup({ targets = { comment = false, string = false } })
+            request('hover')
+            commands.update_immersive(bufnr)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = true, string = true } })
+            for _, row in ipairs({ 1, 3 }) do
+              vim.api.nvim_win_set_cursor(0, { row, 0 })
+              request('hover')
+            end
+            assert.equals(0, #calls)
+            vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { form.string_prefix .. '"updated"' })
+            vim.api.nvim_win_set_cursor(0, { 2, #form.string_prefix + 1 })
+            request('manual')
+            expect_text(
+              profile == 'injection query' and form.ft == 'astro' and '"updated"' or 'updated'
+            )
+            calls = {}
+            commands.update_immersive(bufnr)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = true, string = false } })
+            request('auto')
+            assert.equals(0, #calls)
+            if profile == 'injection query' then
+              vim.api.nvim_buf_set_lines(
+                bufnr,
+                1,
+                2,
+                false,
+                { form.string_prefix .. '"updated # // hidden"' }
+              )
+              vim.api.nvim_win_set_cursor(0, { 2, #form.string_prefix + 10 })
+              request('hover')
+              commands.update_immersive(bufnr)
+              assert.equals(0, #calls)
+            end
+            config.setup({ targets = { comment = true, string = true } })
+            local line = form.comment .. 'changed'
+            vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { line })
+            vim.o.virtualedit = 'onemore'
+            vim.api.nvim_win_set_cursor(0, { 2, #line })
+            request('insert')
+            expect_text('changed')
+          end
+        )
+      end
+    end
+  end
+
+  it('does not join Dockerfile block comments across heredoc delimiters', function()
+    if not require_language('dockerfile') then
+      return
+    end
+    query('dockerfile', '')
+    if not fixture('dockerfile', { 'RUN <<EOF cat <<SECOND', '/*', 'EOF', '*/', 'SECOND' }) then
+      return
+    end
+    commands.enable_immersive(bufnr)
+    assert.equals(0, #calls)
+  end)
+
+  it('keeps Dockerfile COPY heredoc data outside RUN fallback', function()
+    if not require_language('dockerfile') then
+      return
+    end
+    query('dockerfile', '')
+    if not fixture('dockerfile', { 'COPY <<EOF /data', '# "quoted"', 'EOF' }, 2, 4) then
+      return
+    end
+    request('hover')
+    commands.enable_immersive(bufnr)
+    assert.equals(0, #calls)
+  end)
+
+  for _, profile in ipairs({ 'parser only', 'JSON injection' }) do
+    for _, instruction in ipairs({ 'RUN', 'CMD', 'ENTRYPOINT', 'SHELL' }) do
+      for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+        it(
+          'keeps Dockerfile '
+            .. instruction
+            .. ' JSON strings bounded via '
+            .. flow
+            .. ' ('
+            .. profile
+            .. ')',
+          function()
+            if not require_language('dockerfile') then
+              return
+            end
+            if profile == 'JSON injection' and not require_language('json') then
+              return
+            end
+            query(
+              'dockerfile',
+              profile == 'parser only' and ''
+                or '((json_string_array) @injection.content'
+                  .. ' (#set! injection.language "json") (#set! injection.include-children))'
+            )
+            if profile == 'JSON injection' then
+              query('json', '')
+            end
+            local prefix = instruction .. ' ["echo", "'
+            local body = 'こんにちは # -- \\"quoted\\"'
+            local line = prefix .. body .. '"]'
+            if not fixture('dockerfile', { line }, 1, #prefix) then
+              return
+            end
+            config.setup({ targets = { comment = false, string = true } })
+            request(flow)
+            expect_text(body)
+            local root = original_get_parser(bufnr)
+            assert.is_false(root:trees()[1]:root():has_error())
+            local node = root:trees()[1]:root():named_descendant_for_range(0, #prefix, 0, #prefix)
+            assert.equals('json_string', node:type())
+            assert.equals(profile == 'JSON injection', root:children().json ~= nil)
+
+            calls = {}
+            config.setup({ targets = { comment = true, string = false } })
+            vim.api.nvim_win_set_cursor(0, { 1, #prefix + #'こんにちは ' })
+            request(flow)
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = false, string = false } })
+            request(flow)
+            assert.equals(0, #calls)
+
+            config.setup({ targets = { comment = true, string = true } })
+            vim.api.nvim_win_set_cursor(0, { 1, #instruction + 3 })
+            request(flow)
+            expect_text('echo')
+            calls = {}
+            for _, col in ipairs({ 0, #instruction + 1, #prefix - 3, #line - 1, #line }) do
+              vim.o.virtualedit = 'onemore'
+              vim.api.nvim_win_set_cursor(0, { 1, col })
+              request(flow)
+            end
+            commands.update_immersive(bufnr)
+            assert.equals(0, #calls)
+            vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { prefix .. 'edited"]' })
+            vim.api.nvim_win_set_cursor(0, { 1, #prefix })
+            request(flow)
+            expect_text('edited')
+          end
+        )
+      end
+    end
+  end
+
   local quoted_forms = {
     { ft = 'sql', prefix = 'SELECT ', suffix = ';' },
     { ft = 'html', prefix = '<div title=', suffix = '></div>' },

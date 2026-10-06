@@ -116,14 +116,16 @@ regex fallback remains available and uses the target settings.
 At an end-of-line insertion position, hover can resolve the preceding comment;
 this does not extend string detection beyond its node. Quoted-node extraction
 is restricted to the classified string node, including quoted content in
-Bash heredoc bodies, YAML block or plain string scalars, and SQL literals.
+Bash heredoc bodies, YAML block or plain string scalars, SQL literals, and
+Dockerfile JSON instruction arguments.
 
 Injected languages are parsed on first use. A host comment or string keeps its
 existing translation unit and target category, including strings used by
 `vim.cmd`. In Vim language heredocs, Markdown fenced or indented code, metadata and HTML
-blocks, and HTML script/style content, a missing injected parser or injection
-query allows regex fallback only within the unparsed embedded content. Markdown
-metadata delimiters are excluded. Hover and immersive fallback both subtract
+blocks, HTML script/style content, Astro frontmatter, and Dockerfile RUN heredoc
+bodies, a missing injected parser or injection query allows regex fallback only
+within the unparsed embedded content. Unparsed fallback excludes Markdown metadata
+and heredoc delimiters. Hover and immersive fallback both subtract
 parsed child coverage, including partial coverage on the same line. Block
 comments cannot cross fallback ranges.
 Hover chooses injected languages by their individual included regions, so gaps

@@ -6,6 +6,8 @@ local regex = require('comment-translate.parser.regex')
 local comment_node_types = {
   comment = true,
   line_comment = true,
+  single_line_comment = true,
+  js_comment = true,
   block_comment = true,
   documentation_comment = true,
   multiline_comment = true,
@@ -25,6 +27,8 @@ local string_node_types = {
 local quoted_node_types = {
   char_literal = true,
   template_string = true,
+  template_literal_type = true,
+  attribute_backtick_string = true,
   raw_string_literal = true,
   interpreted_string_literal = true,
   raw_string = true,
@@ -33,6 +37,7 @@ local quoted_node_types = {
   system_lib_string = true,
   quoted_attribute_value = true,
   double_quoted_string = true,
+  json_string = true,
   single_quoted_string = true,
   double_quote_string = true,
   single_quote_string = true,
@@ -79,6 +84,26 @@ end
 
 local function opaque_node_range(node)
   local kind = node:type()
+  if kind == 'frontmatter_js_block' then
+    return { node:range() }
+  end
+  if kind == 'heredoc_block' then
+    local parent = node:parent()
+    if parent and parent:type() == 'run_instruction' then
+      -- Dockerfile block ranges include heredoc markers; keep only body lines.
+      local first, last
+      for child in node:iter_children() do
+        if child:type() == 'heredoc_line' then
+          first, last = first or child, child
+        end
+      end
+      if first then
+        local start_row, start_col = first:start()
+        local end_row, end_col = last:end_()
+        return { start_row, start_col, end_row, end_col }
+      end
+    end
+  end
   if kind == 'raw_text' then
     local parent = node:parent()
     if parent and (parent:type() == 'script_element' or parent:type() == 'style_element') then
@@ -217,8 +242,12 @@ end
 
 local function get_target_text(node, bufnr, injected)
   local text = vim.treesitter.get_node_text(node, bufnr)
-  -- SQL block comments need node-bounded cleaning even in the host tree.
-  if not comment_node_types[node:type()] or (not injected and node:type() ~= 'marginalia') then
+  local slash_comment = node:type() == 'single_line_comment' or node:type() == 'js_comment'
+  -- Restored comment forms need node-bounded cleaning even in the host tree.
+  if
+    not comment_node_types[node:type()]
+    or (not injected and node:type() ~= 'marginalia' and not slash_comment)
+  then
     return text
   end
   -- Clean only a proven comment node. The host commentstring and a generic
@@ -230,7 +259,7 @@ local function get_target_text(node, bufnr, injected)
   else
     cleaned = regex.get_all_comments(bufnr, range)[range[1]]
   end
-  return cleaned or text
+  return cleaned or (slash_comment and '' or text)
 end
 
 ---@param bufnr number
