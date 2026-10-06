@@ -154,19 +154,22 @@ local function contains(outer, inner)
     and not before(outer[3], outer[4], inner[3], inner[4])
 end
 
-local function included_ranges(language_tree, tree)
-  local regions = language_tree:included_regions() or {}
-  for index, candidate in pairs(language_tree:trees()) do
-    if candidate == tree then
+local function included_ranges(cache, language_tree, tree)
+  local by_tree = cache[language_tree]
+  if not by_tree then
+    by_tree = {}
+    cache[language_tree] = by_tree
+    local regions = language_tree:included_regions() or {}
+    for index, candidate in pairs(language_tree:trees()) do
       local ranges = {}
       for _, range in ipairs(regions[index] or {}) do
         -- LanguageTree regions include absolute byte offsets on some versions.
         table.insert(ranges, #range == 6 and { range[1], range[2], range[4], range[5] } or range)
       end
-      return ranges
+      by_tree[candidate] = ranges
     end
   end
-  return {}
+  return by_tree[tree] or {}
 end
 
 local function intersect(range, included)
@@ -181,8 +184,62 @@ local function intersect(range, included)
   return clipped
 end
 
-local function effective_ranges(language_tree, tree, parent_ranges, for_fallback)
-  local included = included_ranges(language_tree, tree)
+-- Keep owners distinct while indexing their regions. The subtree end bound
+-- also handles overlapping owners without scanning unrelated earlier regions.
+local function region_index(groups)
+  local entries = {}
+  for owner, ranges in ipairs(groups) do
+    for _, range in ipairs(ranges) do
+      table.insert(entries, { range = range, owner = owner, order = #entries + 1 })
+    end
+  end
+  table.sort(entries, function(a, b)
+    return before(a.range[1], a.range[2], b.range[1], b.range[2])
+  end)
+  local function build(first, last)
+    if first > last then
+      return
+    end
+    local middle = math.floor((first + last) / 2)
+    local entry = entries[middle]
+    entry.left, entry.right = build(first, middle - 1), build(middle + 1, last)
+    entry.finish = entry.range
+    for _, child in pairs({ entry.left, entry.right }) do
+      if before(entry.finish[3], entry.finish[4], child.finish[3], child.finish[4]) then
+        entry.finish = child.finish
+      end
+    end
+    return entry
+  end
+  local root = build(1, #entries)
+  return {
+    query = function(_, range)
+      local matches = {}
+      local function visit(entry)
+        if not entry or before(entry.finish[3], entry.finish[4], range[1], range[2]) then
+          return
+        end
+        visit(entry.left)
+        if before(range[3], range[4], entry.range[1], entry.range[2]) then
+          return
+        end
+        if not before(entry.range[3], entry.range[4], range[1], range[2]) then
+          table.insert(matches, entry)
+        end
+        visit(entry.right)
+      end
+      visit(root)
+      -- Retain the original tree/region order when several owners overlap.
+      table.sort(matches, function(a, b)
+        return a.order < b.order
+      end)
+      return matches
+    end,
+  }
+end
+
+local function effective_ranges(cache, language_tree, tree, parent_ranges, for_fallback)
+  local included = included_ranges(cache, language_tree, tree)
   if not parent_ranges then
     return included
   end
@@ -192,7 +249,21 @@ local function effective_ranges(language_tree, tree, parent_ranges, for_fallback
   local clipped = {}
   for _, range in ipairs(included) do
     local owned, overlapping = {}, {}
-    for _, parent_regions in ipairs(parent_ranges) do
+    local candidates = parent_ranges
+    if parent_ranges.query then
+      candidates = {}
+      local by_owner = {}
+      for _, entry in ipairs(parent_ranges:query(range)) do
+        local regions = by_owner[entry.owner]
+        if not regions then
+          regions = {}
+          by_owner[entry.owner] = regions
+          table.insert(candidates, regions)
+        end
+        table.insert(regions, entry.range)
+      end
+    end
+    for _, parent_regions in ipairs(candidates) do
       local start_owned, end_owned = false, false
       for _, region in ipairs(parent_regions) do
         start_owned = start_owned or contains(region, { range[1], range[2], range[1], range[2] })
@@ -211,9 +282,9 @@ local function effective_ranges(language_tree, tree, parent_ranges, for_fallback
   return clipped
 end
 
-local function tree_in_regions(language_tree, position, parent_ranges)
+local function tree_in_regions(cache, language_tree, position, parent_ranges)
   for _, tree in pairs(language_tree:trees()) do
-    for _, region in ipairs(effective_ranges(language_tree, tree, parent_ranges)) do
+    for _, region in ipairs(effective_ranges(cache, language_tree, tree, parent_ranges)) do
       if contains(region, position) then
         return tree
       end
@@ -237,6 +308,63 @@ local function subtract(ranges, covered)
         table.insert(remaining, { covered[3], covered[4], range[3], range[4] })
       end
     end
+  end
+  return remaining
+end
+
+local function merge_coverage(ranges)
+  table.sort(ranges, function(a, b)
+    return before(a[1], a[2], b[1], b[2])
+  end)
+  local merged = {}
+  for _, range in ipairs(ranges) do
+    local last = merged[#merged]
+    if last and not before(last[3], last[4], range[1], range[2]) then
+      if before(last[3], last[4], range[3], range[4]) then
+        last[3], last[4] = range[3], range[4]
+      end
+    else
+      -- Never mutate included-region metadata shared with another owner.
+      table.insert(merged, { range[1], range[2], range[3], range[4] })
+    end
+  end
+  return merged
+end
+
+local function uncovered_ranges(range, coverage)
+  coverage = coverage or {}
+  local first, last = 1, #coverage
+  while first <= last do
+    local middle = math.floor((first + last) / 2)
+    local covered = coverage[middle]
+    if before(range[1], range[2], covered[3], covered[4]) then
+      last = middle - 1
+    else
+      first = middle + 1
+    end
+  end
+  if
+    first > #coverage or not before(coverage[first][1], coverage[first][2], range[3], range[4])
+  then
+    return { range }
+  end
+
+  local remaining, row, col = {}, range[1], range[2]
+  for index = first, #coverage do
+    local covered = coverage[index]
+    if
+      not before(covered[1], covered[2], range[3], range[4])
+      or not before(row, col, range[3], range[4])
+    then
+      break
+    end
+    if before(row, col, covered[1], covered[2]) then
+      table.insert(remaining, { row, col, covered[1], covered[2] })
+    end
+    row, col = covered[3], covered[4]
+  end
+  if before(row, col, range[3], range[4]) then
+    table.insert(remaining, { row, col, range[3], range[4] })
   end
   return remaining
 end
@@ -273,6 +401,9 @@ function M.get_text_at_position(bufnr, row, col)
     return nil, nil, false
   end
 
+  -- Cache raw regions only for this fully parsed request. Parent clipping is
+  -- context-dependent and must still be computed for each use.
+  local range_cache = {}
   local range = { row, col, row, col + 1 }
   local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
   local previous_range = col > 0 and line and col == #line and { row, col - 1, row, col } or nil
@@ -282,7 +413,7 @@ function M.get_text_at_position(bufnr, row, col)
     end
     -- Neovim 0.10 contains/tree_for_range use the envelope of combined
     -- regions. Gaps belong to the host or a sibling, not this injection.
-    return tree_in_regions(language_tree, position, parent_ranges)
+    return tree_in_regions(range_cache, language_tree, position, parent_ranges)
   end
   local function resolve(language_tree, parent_ranges, ownership_ranges)
     local tree = tree_at(language_tree, range, parent_ranges)
@@ -305,7 +436,7 @@ function M.get_text_at_position(bufnr, row, col)
         tree, node = previous_tree, previous_node
       end
     end
-    local included = effective_ranges(language_tree, tree, parent_ranges)
+    local included = effective_ranges(range_cache, language_tree, tree, parent_ranges)
     if target then
       if not config.config.targets[category] then
         return nil, nil, true
@@ -340,14 +471,18 @@ function M.get_text_at_position(bufnr, row, col)
     if language_tree ~= parser then
       child_ownership = {}
       for _, candidate in pairs(language_tree:trees()) do
-        table.insert(child_ownership, effective_ranges(language_tree, candidate, ownership_ranges))
+        table.insert(
+          child_ownership,
+          effective_ranges(range_cache, language_tree, candidate, ownership_ranges)
+        )
       end
+      child_ownership = region_index(child_ownership)
     end
 
     -- Host strings/comments retain their existing translation unit and targets.
     -- Only descend into injections when the host has no eligible category.
+    local child_ranges = language_tree ~= parser and region_index({ included }) or nil
     for _, child in pairs(language_tree:children()) do
-      local child_ranges = language_tree ~= parser and { included } or nil
       if
         tree_at(child, range, child_ranges)
         or (previous_range and tree_at(child, previous_range, child_ranges))
@@ -366,7 +501,9 @@ function M.get_text_at_position(bufnr, row, col)
     -- Regex may inspect only the unparsed fragment containing the cursor.
     for _, child in pairs(language_tree:children()) do
       for _, child_tree in pairs(child:trees()) do
-        for _, covered in ipairs(effective_ranges(child, child_tree, child_ownership, true)) do
+        for _, covered in
+          ipairs(effective_ranges(range_cache, child, child_tree, child_ownership, true))
+        do
           remaining = subtract(remaining, covered)
         end
       end
@@ -393,14 +530,23 @@ function M.get_all_comments(bufnr)
     return {}, false, {}
   end
 
-  local comments, opaque, coverage = {}, {}, {}
-  local ancestors, ancestor_ranges = {}, {}
+  local comments, opaque, coverage, range_cache = {}, {}, {}, {}
+  local ancestors = {}
   local function inside_host_target(node)
     local row, col = node:start()
     local point = { row, col, row, col + 1 }
-    for _, host in ipairs(ancestors) do
-      local tree = host == parser and host:tree_for_range(point)
-        or tree_in_regions(host, point, ancestor_ranges[host])
+    for _, ancestor in ipairs(ancestors) do
+      local host, tree = ancestor.language_tree
+      if host == parser then
+        tree = host:tree_for_range(point)
+      else
+        for _, entry in ipairs(ancestor.index:query(point)) do
+          if contains(entry.range, point) then
+            tree = ancestor.trees[entry.owner]
+            break
+          end
+        end
+      end
       local host_node = tree and tree:root():named_descendant_for_range(row, col, row, col)
       if find_target(host_node) then
         return true
@@ -410,12 +556,37 @@ function M.get_all_comments(bufnr)
   end
 
   local function collect(language_tree, parent_ranges)
-    local language_ranges = {}
+    local language_ranges, trees = {}, {}
     for _, tree in pairs(language_tree:trees()) do
-      local included = effective_ranges(language_tree, tree, parent_ranges)
-      table.insert(language_ranges, included)
-      for _, range in ipairs(effective_ranges(language_tree, tree, parent_ranges, true)) do
-        table.insert(coverage, { range = range, ancestors = vim.list_extend({}, ancestors) })
+      table.insert(
+        language_ranges,
+        effective_ranges(range_cache, language_tree, tree, parent_ranges)
+      )
+      table.insert(trees, tree)
+    end
+    local index = region_index(language_ranges)
+    for owner, tree in ipairs(trees) do
+      local included = language_ranges[owner]
+      local function candidates(range)
+        if #included <= 1 then
+          return included
+        end
+        local ranges = {}
+        for _, entry in ipairs(index:query(range)) do
+          if entry.owner == owner then
+            table.insert(ranges, entry.range)
+          end
+        end
+        return ranges
+      end
+      for _, range in
+        ipairs(effective_ranges(range_cache, language_tree, tree, parent_ranges, true))
+      do
+        for _, ancestor in ipairs(ancestors) do
+          local host = ancestor.language_tree
+          coverage[host] = coverage[host] or {}
+          table.insert(coverage[host], range)
+        end
       end
 
       local function traverse(node)
@@ -425,8 +596,9 @@ function M.get_all_comments(bufnr)
           end
           if #ancestors > 0 then
             local contained = false
-            for _, range in ipairs(included) do
-              contained = contained or contains(range, { node:range() })
+            local node_range = { node:range() }
+            for _, range in ipairs(candidates(node_range)) do
+              contained = contained or contains(range, node_range)
             end
             -- A combined injection can span disjoint regions. Do not extract
             -- intervening host code as part of a contiguous comment node.
@@ -443,7 +615,7 @@ function M.get_all_comments(bufnr)
 
         local range = opaque_node_range(node)
         if range and not inside_host_target(node) then
-          local ranges = #ancestors > 0 and intersect(range, included) or { range }
+          local ranges = #ancestors > 0 and intersect(range, candidates(range)) or { range }
           for _, clipped in ipairs(ranges) do
             table.insert(opaque, { range = clipped, language_tree = language_tree })
           end
@@ -455,28 +627,20 @@ function M.get_all_comments(bufnr)
       traverse(tree:root())
     end
 
-    table.insert(ancestors, language_tree)
-    ancestor_ranges[language_tree] = parent_ranges
+    table.insert(ancestors, { language_tree = language_tree, index = index, trees = trees })
     for _, child in pairs(language_tree:children()) do
-      collect(child, language_tree ~= parser and language_ranges or nil)
+      collect(child, language_tree ~= parser and index or nil)
     end
     table.remove(ancestors)
-    ancestor_ranges[language_tree] = nil
   end
   collect(parser)
 
+  for host, ranges in pairs(coverage) do
+    coverage[host] = merge_coverage(ranges)
+  end
   local fallback_ranges = {}
   for _, region in ipairs(opaque) do
-    local remaining = { region.range }
-    for _, parsed in ipairs(coverage) do
-      for _, host in ipairs(parsed.ancestors) do
-        if host == region.language_tree then
-          remaining = subtract(remaining, parsed.range)
-          break
-        end
-      end
-    end
-    vim.list_extend(fallback_ranges, remaining)
+    vim.list_extend(fallback_ranges, uncovered_ranges(region.range, coverage[region.language_tree]))
   end
   return comments, true, fallback_ranges
 end

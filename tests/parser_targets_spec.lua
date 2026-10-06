@@ -2659,6 +2659,78 @@ describe('parser target request boundary', function()
     expect_text('こんにちは')
   end)
 
+  for _, profile in ipairs({ 'separate', 'combined parent', 'combined leaf' }) do
+    it('scales nested Markdown HTML JavaScript collection: ' .. profile, function()
+      if
+        not require_language('markdown')
+        or not require_language('html')
+        or not require_language('javascript')
+      then
+        return
+      end
+      query(
+        'markdown',
+        '(fenced_code_block (code_fence_content) @injection.content'
+          .. ' (#set! injection.language "html")'
+          .. (profile ~= 'separate' and ' (#set! injection.combined)' or '')
+          .. ')'
+      )
+      query(
+        'html',
+        '(script_element (raw_text) @injection.content (#set! injection.language "javascript")'
+          .. (profile == 'combined leaf' and ' (#set! injection.combined)' or '')
+          .. ')'
+      )
+      local counts, cursor_counts = {}, {}
+      for _, size in ipairs({ 64, 256 }) do
+        local lines = {}
+        for _ = 1, size do
+          vim.list_extend(
+            lines,
+            { '```html', '<script>', '// こんにちは', '</script>', '```', '' }
+          )
+        end
+        if not fixture('markdown', lines) then
+          return
+        end
+        -- First collection must discover both injection levels without preparse.
+        local comments = parser.get_all_comments(bufnr)
+        assert.equals(size, vim.tbl_count(comments))
+        local original_ipairs, count = ipairs, 0
+        _G.ipairs = function(value)
+          local next_item, state, key = original_ipairs(value)
+          return function(_, previous)
+            local index, item = next_item(state, previous)
+            if index ~= nil then
+              count = count + 1
+            end
+            return index, item
+          end,
+            state,
+            key
+        end
+        local ok, result = pcall(parser.get_all_comments, bufnr)
+        counts[size] = count
+        count = 0
+        vim.api.nvim_win_set_cursor(0, { (size - 1) * 6 + 3, 4 })
+        local cursor_ok, text = pcall(parser.get_text_at_cursor, bufnr)
+        cursor_counts[size] = count
+        _G.ipairs = original_ipairs
+        assert.is_true(ok)
+        assert.is_true(cursor_ok)
+        assert.is_true(text == 'こんにちは')
+        assert.equals(size, vim.tbl_count(result))
+        for index = 1, size do
+          assert.is_true(comments[(index - 1) * 6 + 2] == 'こんにちは')
+          assert.is_true(result[(index - 1) * 6 + 2] == 'こんにちは')
+        end
+      end
+      -- Deterministic work bound for a warm parse, independent of machine speed.
+      assert.is_true(counts[256] <= counts[64] * 6)
+      assert.is_true(cursor_counts[256] <= cursor_counts[64] * 6)
+    end)
+  end
+
   for _, profile in ipairs({
     'no inner query',
     'missing inner parser',

@@ -411,6 +411,345 @@ describe('parser', function()
     end)
   end)
 
+  describe('injection range lookup work', function()
+    local treesitter, bufnr, original_get_parser, original_pairs, original_ipairs
+
+    local function node(kind, range, children)
+      children = children or {}
+      return {
+        type = function()
+          return kind
+        end,
+        range = function()
+          return unpack(range)
+        end,
+        start = function()
+          return range[1], range[2]
+        end,
+        parent = function() end,
+        iter_children = function()
+          local index = 0
+          return function()
+            index = index + 1
+            return children[index]
+          end
+        end,
+        named_descendant_for_range = function(_, row)
+          return children[row - range[1] + 1]
+        end,
+      }
+    end
+
+    local function model(opaque, regions, six_fields, reverse)
+      local nodes, trees, included, keys = {}, {}, {}, {}
+      local height = 1
+      for _, range in ipairs(opaque) do
+        table.insert(nodes, node('code_fence_content', range))
+        height = math.max(height, range[3] + 1)
+      end
+      for index, ranges in ipairs(regions) do
+        local key = index * 3 -- Region keys need not be dense or match pairs order.
+        local root = node('program', ranges[1])
+        trees[key] = {
+          root = function()
+            return root
+          end,
+        }
+        included[key] = {}
+        table.insert(keys, key)
+        for _, range in ipairs(ranges) do
+          height = math.max(height, range[3] + 1)
+          table.insert(included[key], six_fields and {
+            range[1],
+            range[2],
+            range[1] * 17 + range[2],
+            range[3],
+            range[4],
+            range[3] * 17 + range[4],
+          } or range)
+        end
+      end
+      local lines = {}
+      for _ = 1, height do
+        table.insert(lines, 'abcdefghijklmnop')
+      end
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+      local child = {
+        trees = function()
+          return trees
+        end,
+        included_regions = function()
+          return included
+        end,
+        children = function()
+          return {}
+        end,
+      }
+      local root = node('program', { 0, 0, height - 1, 16 }, nodes)
+      local tree = {
+        root = function()
+          return root
+        end,
+      }
+      local host = {
+        parse = function(_, all)
+          assert.is_true(all)
+          return { tree }
+        end,
+        trees = function()
+          return { tree }
+        end,
+        included_regions = function()
+          return { {} }
+        end,
+        tree_for_range = function()
+          return tree
+        end,
+        children = function()
+          return { lua = child }
+        end,
+      }
+      vim.treesitter.get_parser = function()
+        return host
+      end
+      _G.pairs = function(value)
+        if value ~= trees then
+          return original_pairs(value)
+        end
+        local index = reverse and #keys + 1 or 0
+        return function()
+          index = index + (reverse and -1 or 1)
+          local key = keys[index]
+          if key then
+            return key, trees[key]
+          end
+        end
+      end
+      return included, child
+    end
+
+    local function work(iterator, callback)
+      local original, count = _G[iterator], 0
+      _G[iterator] = function(value)
+        local next_item, state, key = original(value)
+        return function(_, previous)
+          local index, item = next_item(state, previous)
+          if index ~= nil then
+            count = count + 1
+          end
+          return index, item
+        end,
+          state,
+          key
+      end
+      local ok, err = pcall(callback)
+      _G[iterator] = original
+      if not ok then
+        error(err)
+      end
+      return count
+    end
+
+    before_each(function()
+      package.loaded['comment-translate.parser.treesitter'] = nil
+      require('comment-translate.config').setup({ targets = { comment = true, string = true } })
+      treesitter = require('comment-translate.parser.treesitter')
+      original_get_parser = vim.treesitter.get_parser
+      original_pairs, original_ipairs = pairs, ipairs
+      bufnr = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'abcdefghijklmnop' })
+    end)
+
+    after_each(function()
+      vim.treesitter.get_parser = original_get_parser
+      _G.pairs, _G.ipairs = original_pairs, original_ipairs
+      vim.api.nvim_buf_delete(bufnr, { force = true })
+    end)
+
+    for _, reverse in ipairs({ false, true }) do
+      for _, position in ipairs({ 'late tree', 'outside all trees' }) do
+        it(
+          'keeps cursor lookup linear: ' .. position .. ', reverse=' .. tostring(reverse),
+          function()
+            local counts = {}
+            for _, size in ipairs({ 64, 256 }) do
+              local opaque, regions = {}, {}
+              for row = 0, size - 1 do
+                local range = { row, 0, row, 16 }
+                table.insert(opaque, range)
+                table.insert(regions, { range })
+              end
+              model(opaque, regions, false, reverse)
+              local row = position == 'outside all trees' and size or (reverse and 0 or size - 1)
+              counts[size] = work('pairs', function()
+                local text, _, handled = treesitter.get_text_at_position(bufnr, row, 2)
+                assert.is_nil(text)
+                assert.is_true(handled)
+              end)
+            end
+            -- Four times as many trees must not cause quadratic identity searches.
+            assert.is_true(counts[256] <= counts[64] * 6)
+          end
+        )
+      end
+    end
+
+    for _, profile in ipairs({ 'separate', 'combined', 'unparsed', 'mixed', 'fragmented' }) do
+      it('avoids quadratic coverage scans: ' .. profile, function()
+        local counts = {}
+        for _, size in ipairs({ 64, 256 }) do
+          local opaque, regions, expected = {}, profile == 'combined' and { {} } or {}, {}
+          for row = 0, size - 1 do
+            local range = { row, 0, row, 16 }
+            if profile == 'fragmented' then
+              table.insert(regions, { { row, 4, row, 12 } })
+              table.insert(expected, { row == 0 and 0 or row - 1, row == 0 and 0 or 12, row, 4 })
+            elseif profile == 'unparsed' or (profile == 'mixed' and row % 2 == 1) then
+              table.insert(expected, range)
+            elseif profile == 'combined' then
+              table.insert(regions[1], range)
+            else
+              table.insert(regions, { range })
+            end
+            table.insert(opaque, range)
+          end
+          if profile == 'fragmented' then
+            opaque = { { 0, 0, size - 1, 16 } }
+            table.insert(expected, { size - 1, 12, size - 1, 16 })
+          end
+          model(opaque, regions, false, true)
+          counts[size] = work('ipairs', function()
+            local comments, handled, fallback = treesitter.get_all_comments(bufnr)
+            assert.same({}, comments)
+            assert.is_true(handled)
+            assert.same(expected, fallback)
+          end)
+        end
+        assert.is_true(counts[256] <= counts[64] * 6)
+      end)
+    end
+
+    for _, profile in ipairs({ 'separate', 'combined parent', 'combined leaf' }) do
+      for _, reverse in ipairs({ false, true }) do
+        it(
+          'keeps nested ownership and ancestor lookup scalable: '
+            .. profile
+            .. ', reverse='
+            .. tostring(reverse),
+          function()
+            local counts, cursor_counts = {}, {}
+            for _, size in ipairs({ 64, 256 }) do
+              local opaque, regions, nested_trees, nested_regions = {}, {}, {}, {}
+              local leaf_nodes = {}
+              if profile ~= 'separate' then
+                regions[1] = {}
+              end
+              for row = 0, size - 1 do
+                local range = { row, 0, row, 16 }
+                table.insert(opaque, range)
+                if profile ~= 'separate' then
+                  table.insert(regions[1], range)
+                else
+                  table.insert(regions, { range })
+                end
+                local comment = node('comment', range)
+                table.insert(leaf_nodes, comment)
+                local root = node('program', range, { comment })
+                nested_trees[(row + 1) * 7] = {
+                  root = function()
+                    return root
+                  end,
+                }
+                nested_regions[(row + 1) * 7] = { range }
+              end
+              if profile == 'combined leaf' then
+                local root = node('program', { 0, 0, size - 1, 16 }, leaf_nodes)
+                nested_trees = {
+                  [7] = {
+                    root = function()
+                      return root
+                    end,
+                  },
+                }
+                nested_regions = { [7] = regions[1] }
+              end
+              local _, parent = model(opaque, regions, true, reverse)
+              parent.children = function()
+                return {
+                  javascript = {
+                    trees = function()
+                      return nested_trees
+                    end,
+                    included_regions = function()
+                      return nested_regions
+                    end,
+                    children = function()
+                      return {}
+                    end,
+                  },
+                }
+              end
+              counts[size] = work('ipairs', function()
+                local comments, handled, fallback = treesitter.get_all_comments(bufnr)
+                assert.is_true(handled)
+                assert.equals(size, vim.tbl_count(comments))
+                for row = 0, size - 1 do
+                  assert.is_true(comments[row] == 'abcdefghijklmnop')
+                end
+                assert.same({}, fallback)
+              end)
+              cursor_counts[size] = work('ipairs', function()
+                local text, _, handled = treesitter.get_text_at_position(bufnr, size - 1, 2)
+                assert.is_true(handled)
+                assert.is_true(text == 'abcdefghijklmnop')
+              end)
+            end
+            -- Includes parent ownership clipping and per-comment ancestor search.
+            assert.is_true(counts[256] <= counts[64] * 6)
+            assert.is_true(cursor_counts[256] <= cursor_counts[64] * 6)
+          end
+        )
+      end
+    end
+
+    for _, six_fields in ipairs({ false, true }) do
+      it(
+        'subtracts overlapping coverage without changing its metadata: six=' .. tostring(six_fields),
+        function()
+          local included = model({
+            { 0, 0, 0, 16 },
+            { 1, 0, 1, 16 },
+            { 2, 0, 2, 16 },
+          }, {
+            { { 0, 9, 0, 12 }, { 0, 5, 0, 9 }, { 0, 2, 0, 6 } },
+            { { 1, 0, 1, 16 } },
+            { { 2, 16, 3, 0 } },
+          }, six_fields, true)
+          local snapshot = vim.deepcopy(included)
+          local _, handled, fallback = treesitter.get_all_comments(bufnr)
+          assert.is_true(handled)
+          assert.same({ { 0, 0, 0, 2 }, { 0, 12, 0, 16 }, { 2, 0, 2, 16 } }, fallback)
+          assert.same(snapshot, included)
+        end
+      )
+    end
+
+    it('refreshes region metadata on the next request', function()
+      local included = model({ { 0, 0, 0, 16 }, { 1, 0, 1, 16 } }, { { { 0, 0, 0, 16 } } })
+      local _, _, fallback = treesitter.get_all_comments(bufnr)
+      assert.same({ { 1, 0, 1, 16 } }, fallback)
+      local _, _, handled, fragment = treesitter.get_text_at_position(bufnr, 0, 2)
+      assert.is_true(handled)
+      assert.is_nil(fragment)
+      included[3] = { { 1, 0, 1, 16 } }
+      _, _, fallback = treesitter.get_all_comments(bufnr)
+      assert.same({ { 0, 0, 0, 16 } }, fallback)
+      _, _, handled, fragment = treesitter.get_text_at_position(bufnr, 0, 2)
+      assert.is_false(handled)
+      assert.same({ 0, 0, 0, 16 }, fragment)
+    end)
+  end)
+
   describe('fallback get_text_at_cursor', function()
     local parser
     local config
