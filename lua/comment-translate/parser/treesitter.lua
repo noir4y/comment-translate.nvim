@@ -57,6 +57,38 @@ local quoted_node_types = {
   literal = true,
 }
 
+local function is_quoted_node(node)
+  local kind = node:type()
+  if quoted_node_types[kind] then
+    return true
+  end
+  if kind == 'nowdoc_string' or kind == 'nowdoc_body' then
+    -- Keep the host category even when its enclosing node is incomplete.
+    return true
+  end
+  local parent = node:parent()
+  if kind == 'body' and parent and parent:type() == 'heredoc' then
+    local statement = parent:parent()
+    local statement_type = statement and statement:type()
+    return statement_type == 'let_statement' or statement_type == 'const_statement'
+  end
+  return false
+end
+
+local function is_complete_quoted_node(node)
+  local kind = node:type()
+  local parent = node:parent()
+  if kind == 'nowdoc_string' or kind == 'nowdoc_body' then
+    local nowdoc = kind == 'nowdoc_string' and parent and parent:parent() or parent
+    -- A body can survive under ERROR when the closing marker is missing.
+    return nowdoc and nowdoc:type() == 'nowdoc' and not nowdoc:has_error()
+  end
+  if kind == 'body' then
+    return parent and not parent:has_error()
+  end
+  return true
+end
+
 -- A parser is released with its buffer; do not retain it through this cache.
 local python3_cache = setmetatable({}, { __mode = 'k' })
 
@@ -254,7 +286,7 @@ local function find_target(node)
     if comment_node_types[kind] then
       return node, 'comment'
     end
-    if string_node_types[kind] or quoted_node_types[kind] then
+    if string_node_types[kind] or is_quoted_node(node) then
       return node, 'string'
     end
     node = node:parent()
@@ -265,6 +297,24 @@ local function opaque_node_range(node)
   local kind = node:type()
   if kind == 'frontmatter_js_block' then
     return { node:range() }
+  end
+  if kind == 'shell_fragment' then
+    local parent = node:parent()
+    if parent and parent:type() == 'shell_command' then
+      return { node:range() }
+    end
+  end
+  if kind == 'inline' then
+    local parent = node:parent()
+    local parent_type = parent and parent:type()
+    -- markdown_inline has a parsed root named inline; it is not opaque.
+    if
+      parent_type == 'paragraph'
+      or parent_type == 'atx_heading'
+      or parent_type == 'setext_heading'
+    then
+      return { node:range() }
+    end
   end
   if kind == 'heredoc_block' then
     local parent = node:parent()
@@ -294,7 +344,12 @@ local function opaque_node_range(node)
     -- Frontmatter delimiters are Markdown structure, not embedded comments.
     return { start_row + 1, 0, end_row - 1, 0 }
   end
-  if kind == 'code_fence_content' or kind == 'html_block' or kind == 'indented_code_block' then
+  if
+    kind == 'code_fence_content'
+    or kind == 'html_block'
+    or kind == 'indented_code_block'
+    or kind == 'pipe_table_cell'
+  then
     return { node:range() }
   end
   if kind == 'body' or kind == 'chunk' then
@@ -637,7 +692,10 @@ function M.get_text_at_position(bufnr, row, col)
         local text = not target:has_error() and vim.treesitter.get_node_text(target, bufnr)
         return text and text:match('^[bB]?"(.*)"$') or nil, 'string', true
       end
-      if quoted_node_types[target:type()] then
+      if is_quoted_node(target) then
+        if not is_complete_quoted_node(target) then
+          return nil, 'string', true
+        end
         local text = regex.get_string_at_position(bufnr, row, col, { target:range() })
         return text, 'string', true
       end

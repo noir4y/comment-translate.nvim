@@ -274,6 +274,169 @@ describe('parser target request boundary', function()
     expect_text('hello ${name}')
   end)
 
+  for _, form in ipairs({
+    { ft = 'php', open = "<?php $s = <<<'DOC'", close = 'DOC;', outside = '$after = 1;' },
+    { ft = 'vim', open = 'let g:s =<< DOC', close = 'DOC', outside = 'let after = 1' },
+    { ft = 'vim', open = 'let g:s =<< trim DOC', close = 'DOC', outside = 'let after = 1' },
+    { ft = 'vim', open = 'const g:s =<< DOC', close = 'DOC', outside = 'let after = 1' },
+    { ft = 'vim', open = 'const g:s =<< trim DOC', close = 'DOC', outside = 'let after = 1' },
+  }) do
+    for _, profile in ipairs({ 'native', 'parser-only' }) do
+      for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+        for _, enabled in ipairs({ true, false }) do
+          it(
+            'keeps quoted assignment heredoc content bounded: '
+              .. form.open
+              .. ', '
+              .. profile
+              .. ', '
+              .. flow
+              .. ', strings='
+              .. tostring(enabled),
+            function()
+              if not require_language(form.ft) then
+                return
+              end
+              if profile == 'parser-only' then
+                query(form.ft, '')
+              end
+              local prefix, body = '前文 "', 'こんにちは -- # /* body'
+              config.setup({ targets = { comment = true, string = enabled } })
+              if
+                not fixture(form.ft, {
+                  form.open,
+                  prefix .. body .. '"',
+                  '"second"',
+                  form.close,
+                  form.outside,
+                }, 2, #prefix)
+              then
+                return
+              end
+              request(flow)
+              if enabled then
+                expect_text(body)
+              else
+                assert.equals(0, #calls)
+              end
+              assert.is_false(original_get_parser(bufnr):trees()[1]:root():has_error())
+              calls = {}
+              commands.enable_immersive(bufnr)
+              assert.equals(0, #calls)
+              for _, position in ipairs({ { 1, 0 }, { 1, #form.open - 2 }, { 4, 1 }, { 5, 0 } }) do
+                vim.api.nvim_win_set_cursor(0, position)
+                request(flow)
+              end
+              assert.equals(0, #calls)
+              config.setup({ targets = { comment = false, string = true } })
+              vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { '"updated"' })
+              vim.api.nvim_win_set_cursor(0, { 2, 2 })
+              request(flow)
+              expect_text('updated')
+            end
+          )
+        end
+      end
+    end
+    for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+      it('rejects an unterminated assignment heredoc: ' .. form.open .. ', ' .. flow, function()
+        if not fixture(form.ft, { form.open, 'Hello "quoted"' }, 2, 8) then
+          return
+        end
+        request(flow)
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+      end)
+    end
+  end
+
+  for _, form in ipairs({
+    { ft = 'php', open = "<?php $s = <<<'DOC'", close = 'DOC;', content = '(nowdoc_body)' },
+    { ft = 'vim', open = 'let g:s =<< trim DOC', close = 'DOC', content = '(heredoc (body))' },
+    { ft = 'vim', open = 'const g:s =<< trim DOC', close = 'DOC', content = '(heredoc (body))' },
+  }) do
+    for _, first in ipairs({ 'hover', 'manual', 'auto', 'immersive' }) do
+      it(
+        'withholds injected comments in assignment heredoc strings: ' .. form.open .. ', ' .. first,
+        function()
+          if not require_language(form.ft) or not require_language('lua') then
+            return
+          end
+          query(
+            form.ft,
+            '('
+              .. form.content
+              .. ' @injection.content (#set! injection.language "lua") (#set! injection.include-children))'
+          )
+          query('lua', '')
+          config.setup({ targets = { comment = true, string = false } })
+          if not fixture(form.ft, { form.open, '-- "quoted"', form.close }, 2, 5) then
+            return
+          end
+          if first == 'immersive' then
+            commands.enable_immersive(bufnr)
+          else
+            request(first)
+          end
+          expect_child('lua')
+          request('hover')
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = false, string = true } })
+          request('hover')
+          expect_text('quoted')
+        end
+      )
+    end
+  end
+
+  for _, form in ipairs({
+    { ft = 'php', open = "<?php $s = <<<'DOC'", content = '(nowdoc_body)' },
+    { ft = 'vim', open = 'let g:s =<< trim DOC', content = '(heredoc (body))' },
+    { ft = 'vim', open = 'const g:s =<< trim DOC', content = '(heredoc (body))' },
+  }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto', 'immersive' }) do
+      for _, comment in ipairs({ true, false }) do
+        it(
+          'withholds malformed host bodies above custom injections: '
+            .. form.open
+            .. ', '
+            .. flow
+            .. ', comments='
+            .. tostring(comment),
+          function()
+            if not require_language(form.ft) or not require_language('lua') then
+              return
+            end
+            query(
+              form.ft,
+              '('
+                .. form.content
+                .. ' @injection.content (#set! injection.language "lua") (#set! injection.include-children))'
+            )
+            query('lua', '')
+            config.setup({ targets = { comment = comment, string = not comment } })
+            local body = comment and '-- "quoted"' or 'local s = "quoted"'
+            if not fixture(form.ft, { form.open, body }, 2, #body - 3) then
+              return
+            end
+            if flow == 'immersive' then
+              commands.enable_immersive(bufnr)
+            else
+              request(flow)
+            end
+            assert.equals(0, #calls)
+            if flow ~= 'immersive' or comment then
+              assert.is_true(original_get_parser(bufnr):trees()[1]:root():has_error())
+              if form.ft == 'php' then
+                expect_child('lua')
+              end
+            end
+          end
+        )
+      end
+    end
+  end
+
   for _, profile in ipairs({ 'native', 'parser-only' }) do
     for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
       for _, delimiter in ipairs({ '"', "'", '`' }) do
@@ -1011,6 +1174,206 @@ describe('parser target request boundary', function()
     request('hover')
     commands.enable_immersive(bufnr)
     assert.equals(0, #calls)
+  end)
+
+  for _, form in ipairs({
+    {
+      ft = 'dockerfile',
+      lang = 'bash',
+      prefix = 'RUN --mount=type=cache,target=/tmp echo "',
+      suffix = '"',
+    },
+    { ft = 'dockerfile', lang = 'bash', prefix = 'CMD echo "', suffix = '"' },
+    { ft = 'dockerfile', lang = 'bash', prefix = 'ENTRYPOINT echo "', suffix = '"' },
+    { ft = 'markdown', lang = 'markdown_inline', prefix = '前文 [link](url "', suffix = '")' },
+    {
+      ft = 'markdown',
+      lang = 'markdown_inline',
+      prefix = '| 前文 [link](url "',
+      suffix = '") |',
+      before = { '| title |', '| --- |' },
+    },
+  }) do
+    for _, profile in ipairs({
+      'native',
+      'parser only',
+      'injection query',
+      'missing injected parser',
+    }) do
+      for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+        it(
+          'restores bounded opaque quotes: ' .. form.prefix .. ', ' .. profile .. ', ' .. flow,
+          function()
+            if not require_language(form.ft) then
+              return
+            end
+            local injected = profile == 'native' or profile == 'injection query'
+            if injected and not require_language(form.lang) then
+              return
+            end
+            local lang = profile == 'missing injected parser' and 'comment_translate_missing'
+              or form.lang
+            if profile ~= 'native' then
+              local content = form.ft == 'dockerfile'
+                  and '(shell_command (shell_fragment) @injection.content)'
+                or '[(inline) (pipe_table_cell)] @injection.content'
+              query(
+                form.ft,
+                profile == 'parser only' and ''
+                  or '(' .. content .. ' (#set! injection.language "' .. lang .. '"))'
+              )
+            end
+            if injected then
+              query(form.lang, '')
+            end
+            local body = 'こんにちは'
+            local lines = vim.deepcopy(form.before or {})
+            local row = #lines + 1
+            local line = form.prefix .. body .. form.suffix
+            table.insert(lines, line)
+            config.setup({ targets = { comment = true, string = true } })
+            if not fixture(form.ft, lines, row, #form.prefix) then
+              return
+            end
+            request(flow)
+            expect_text(body)
+            if injected then
+              expect_child(form.lang)
+            end
+            assert.is_false(original_get_parser(bufnr):trees()[1]:root():has_error())
+            calls = {}
+            config.setup({ targets = { comment = true, string = false } })
+            request(flow)
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = false, string = false } })
+            request(flow)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = false, string = true } })
+            for _, col in ipairs({ 0, #line }) do
+              vim.o.virtualedit = 'onemore'
+              vim.api.nvim_win_set_cursor(0, { row, col })
+              request(flow)
+            end
+            assert.equals(0, #calls)
+            vim.api.nvim_buf_set_lines(
+              bufnr,
+              row - 1,
+              row,
+              false,
+              { form.prefix .. 'updated' .. form.suffix }
+            )
+            vim.api.nvim_win_set_cursor(0, { row, #form.prefix })
+            request(flow)
+            expect_text('updated')
+            if injected then
+              calls = {}
+              config.setup({ targets = { comment = true, string = false } })
+              vim.api.nvim_buf_set_lines(
+                bufnr,
+                row - 1,
+                row,
+                false,
+                { form.prefix .. 'alpha -- # hidden' .. form.suffix }
+              )
+              vim.api.nvim_win_set_cursor(0, { row, #form.prefix + 10 })
+              request(flow)
+              commands.update_immersive(bufnr)
+              assert.equals(0, #calls)
+            end
+          end
+        )
+      end
+    end
+  end
+
+  for _, ft in ipairs({ 'dockerfile', 'markdown' }) do
+    it('does not join block comments across new opaque regions: ' .. ft, function()
+      if not require_language(ft) then
+        return
+      end
+      query(ft, '')
+      local lines = ft == 'dockerfile' and { 'RUN echo /* first', 'CMD echo last */' }
+        or { '/* first', '', 'last */' }
+      if not fixture(ft, lines) then
+        return
+      end
+      commands.enable_immersive(bufnr)
+      assert.equals(0, #calls)
+    end)
+  end
+
+  for _, form in ipairs({
+    { ft = 'dockerfile', prefix = 'RUN ', suffix = '', node = '(shell_fragment)' },
+    { ft = 'markdown', prefix = '', suffix = '', node = '(inline)' },
+    {
+      ft = 'markdown',
+      prefix = '| ',
+      suffix = ' |',
+      node = '(pipe_table_row (pipe_table_cell) @injection.content)',
+      before = { '| title |', '| --- |' },
+    },
+  }) do
+    for _, flow in ipairs({ 'hover', 'manual', 'auto' }) do
+      it(
+        'clips new opaque fallback around partial parsed coverage: ' .. form.node .. ', ' .. flow,
+        function()
+          if not require_language(form.ft) or not require_language('lua') then
+            return
+          end
+          local unparsed, parsed = '"こんにちは" ', 'return "hidden -- # hidden"'
+          query(
+            form.ft,
+            '('
+              .. form.node
+              .. (form.before and '' or ' @injection.content')
+              .. ' (#set! injection.language "lua") (#offset! @injection.content 0 '
+              .. #unparsed
+              .. ' 0 0))'
+          )
+          query('lua', '')
+          local lines = vim.deepcopy(form.before or {})
+          local row = #lines + 1
+          table.insert(lines, form.prefix .. unparsed .. parsed .. form.suffix)
+          if not fixture(form.ft, lines, row, #form.prefix + 2) then
+            return
+          end
+          request(flow)
+          expect_text('こんにちは')
+          expect_child('lua')
+          calls = {}
+          config.setup({ targets = { comment = true, string = false } })
+          vim.api.nvim_win_set_cursor(0, { row, #form.prefix + #unparsed + 10 })
+          request(flow)
+          commands.enable_immersive(bufnr)
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = false, string = true } })
+          local unclosed = '"unterminated' .. string.rep(' ', #unparsed - #'"unterminated')
+          vim.api.nvim_buf_set_lines(
+            bufnr,
+            row - 1,
+            row,
+            false,
+            { form.prefix .. unclosed .. parsed .. form.suffix }
+          )
+          vim.api.nvim_win_set_cursor(0, { row, #form.prefix + 2 })
+          request(flow)
+          assert.equals(0, #calls)
+        end
+      )
+    end
+  end
+
+  it('retains approximate quote detection in unparsed Markdown prose', function()
+    if not require_language('markdown') then
+      return
+    end
+    query('markdown', '')
+    if not fixture('markdown', { '前文 "こんにちは" 後文' }, 1, #'前文 "') then
+      return
+    end
+    request('auto')
+    expect_text('こんにちは')
   end)
 
   for _, profile in ipairs({ 'parser only', 'JSON injection' }) do
@@ -1807,12 +2170,13 @@ describe('parser target request boundary', function()
         config.setup({ targets = { comment = true, string = true } })
         vim.api.nvim_win_set_cursor(0, { vim.api.nvim_buf_line_count(bufnr), 3 })
         request('hover')
-        assert.equals(0, #calls)
+        -- This separate inline region is independently eligible for fallback.
+        expect_text('outside')
       end)
     end
   end
 
-  it('preserves indented Markdown comments without leaving their range', function()
+  it('keeps indented Markdown comments separate from eligible inline comments', function()
     query('markdown', '')
     if not fixture('markdown', { '    -- こんにちは', '', '-- outside' }, 1, 7) then
       return
@@ -1821,7 +2185,9 @@ describe('parser target request boundary', function()
     expect_text('こんにちは')
     calls = {}
     commands.enable_immersive(bufnr)
-    expect_text('こんにちは')
+    assert.equals(2, #calls)
+    assert.is_true(vim.tbl_contains(calls, 'こんにちは'))
+    assert.is_true(vim.tbl_contains(calls, 'outside'))
   end)
 
   for _, enabled in ipairs({ true, false }) do
@@ -2829,23 +3195,27 @@ describe('parser target request boundary', function()
         }, 3, 3)
       end
 
-      it('preserves separate fallback comments without submitting the host gap', function()
+      it('keeps fallback comments separate from an independently eligible host gap', function()
         if not nested('-- first', '-- こんにちは') then
           return
         end
         commands.enable_immersive(bufnr)
-        assert.equals(2, #calls)
-        assert.is_true(calls[1] == 'first')
-        assert.is_true(calls[2] == 'こんにちは')
+        assert.equals(3, #calls)
+        assert.is_true(vim.tbl_contains(calls, 'first'))
+        assert.is_true(vim.tbl_contains(calls, 'こんにちは'))
+        assert.is_true(vim.tbl_contains(calls, 'excluded host'))
         calls = {}
         request('hover')
         expect_text('first')
         calls = {}
-        for _, row in ipairs({ 1, 4, 5, 6, 9 }) do
+        for _, row in ipairs({ 1, 4, 6, 9 }) do
           vim.api.nvim_win_set_cursor(0, { row, 0 })
           request('hover')
         end
         assert.equals(0, #calls)
+        vim.api.nvim_win_set_cursor(0, { 5, 3 })
+        request('hover')
+        expect_text('excluded host')
       end)
 
       it('does not join a fallback block comment across the host gap', function()
@@ -2857,7 +3227,8 @@ describe('parser target request boundary', function()
           assert.equals(0, #calls)
         end
         commands.enable_immersive(bufnr)
-        assert.equals(0, #calls)
+        -- Only the independent host inline comment may be submitted.
+        expect_text('excluded host')
       end)
     end)
   end
