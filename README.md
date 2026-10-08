@@ -166,9 +166,14 @@ In Vim buffers, `python3` and `py3` heredocs, including `trim`, are also detecte
 with older Vim grammars. Detection preserves the buffer text and byte positions.
 The closing marker must be confirmed: with `trim`, its indentation must match
 the opening command's indentation exactly, including tabs. Without `trim`, the
-marker must occupy its own unindented line. A missing marker or a failed
-compatibility parse withholds hover and immersive requests for that buffer
-instead of retrying with whole-buffer regex fallback.
+marker must occupy its own unindented line. A missing marker or a known
+compatibility failure preserves only complete host comments and strings before
+the first heredoc requiring recovery, subject to the target settings. The target
+must fit within one owning parse region and have no erroneous non-root ancestor.
+The header line and everything after it, erroneous prefix targets, and injected
+content remain withheld; unparsed prefix content does not use regex fallback.
+An unexpected compatibility error without a proven boundary still withholds
+hover and immersive requests for the entire buffer.
 
 Regex detection is approximate and can mistake delimiters inside strings for
 comments. Unparsed Markdown inline content and table cells also retain regex

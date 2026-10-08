@@ -4464,6 +4464,240 @@ describe('parser target request boundary', function()
       return true
     end
 
+    describe('safe host prefix after compatibility failure', function()
+      local function run(flow)
+        if flow == 'immersive' then
+          commands.cleanup_buffer(bufnr)
+          commands.enable_immersive(bufnr)
+        else
+          request(flow)
+        end
+      end
+
+      for _, profile in ipairs({ 'native query', 'parser only' }) do
+        for _, flow in ipairs({ 'hover', 'auto', 'manual', 'insert', 'immersive' }) do
+          it('preserves only enabled host targets: ' .. profile .. ', ' .. flow, function()
+            local input = {
+              '" こんにちは',
+              'let s = "こんにちは # safe"',
+              'python3 << EOF',
+              '"# hidden string"',
+              '# hidden comment',
+            }
+            if not prepare(input, 1, 3) then
+              return
+            end
+            if profile == 'parser only' then
+              query('vim', '')
+            end
+            local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+            if flow == 'insert' then
+              vim.o.virtualedit = 'onemore'
+              vim.api.nvim_win_set_cursor(0, { 1, #input[1] })
+            end
+            run(flow)
+            expect_text('こんにちは')
+            calls = {}
+            if flow ~= 'immersive' then
+              vim.api.nvim_win_set_cursor(0, { 2, 10 })
+              run(flow)
+              expect_text('"こんにちは # safe"')
+              calls = {}
+              config.setup({ targets = { comment = true, string = false } })
+              run(flow)
+              assert.equals(0, #calls)
+            end
+            config.setup({ targets = { comment = false, string = true } })
+            vim.api.nvim_win_set_cursor(0, { 1, 3 })
+            run(flow)
+            assert.equals(0, #calls)
+            config.setup({ targets = { comment = true, string = true } })
+            for row = 3, #input do
+              vim.api.nvim_win_set_cursor(0, { row, 3 })
+              if flow ~= 'immersive' then
+                run(flow)
+                assert.equals(0, #calls)
+              end
+            end
+            assert.equals(tick, vim.api.nvim_buf_get_changedtick(bufnr))
+            assert.is_true(vim.deep_equal(input, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)))
+          end)
+        end
+      end
+
+      for _, ending in ipairs({ 'trailing space', 'wrong trim indentation', 'invalid marker' }) do
+        it('preserves the safe prefix with ' .. ending, function()
+          local input = ending == 'wrong trim indentation'
+              and { '" safe', '  py3 << trim EOF', '    "hidden"', ' EOF' }
+            or { '" safe', 'py3 << EOF', '"hidden"', 'EOF ' }
+          if ending == 'invalid marker' then
+            input[2] = 'py3 << END MARKER'
+          end
+          if not prepare(input, 1, 3) then
+            return
+          end
+          request('hover')
+          expect_text('safe')
+          calls = {}
+          vim.api.nvim_win_set_cursor(0, { 3, 3 })
+          request('hover')
+          assert.equals(0, #calls)
+          run('immersive')
+          expect_text('safe')
+        end)
+      end
+
+      it('withholds earlier heredoc bodies and intervening host comments', function()
+        config.setup({ targets = { comment = true, string = false } })
+        if
+          not prepare({
+            '" safe',
+            'python3 << FIRST',
+            '"# hidden string"',
+            'FIRST',
+            '" between',
+            'py3 << SECOND',
+            '# uncertain',
+          }, 1, 3)
+        then
+          return
+        end
+        request('hover')
+        expect_text('safe')
+        calls = {}
+        for _, row in ipairs({ 2, 3, 4, 5, 6, 7 }) do
+          vim.api.nvim_win_set_cursor(0, { row, 3 })
+          request('hover')
+          assert.equals(0, #calls)
+        end
+        run('immersive')
+        expect_text('safe')
+      end)
+
+      it('withholds prefix targets under an erroneous ancestor', function()
+        if
+          not prepare({
+            '" safe',
+            'function! Example()',
+            '  " uncertain prefix',
+            '  python3 << EOF',
+            '"hidden"',
+          }, 3, 5)
+        then
+          return
+        end
+        request('hover')
+        assert.equals(0, #calls)
+        run('immersive')
+        expect_text('safe')
+      end)
+
+      for _, profile in ipairs({ 'native query', 'parser only' }) do
+        it('does not restore injected targets or regex fallback: ' .. profile, function()
+          if not prepare({ '" safe', 'lua << END', '-- hidden', 'END', 'py3 << EOF' }, 3, 4) then
+            return
+          end
+          if profile == 'parser only' then
+            query('vim', '')
+          end
+          request('hover')
+          assert.equals(0, #calls)
+          run('immersive')
+          expect_text('safe')
+        end)
+      end
+
+      it('invalidates the boundary when a terminator or earlier header is edited', function()
+        if not prepare({ '" safe', 'py3 << EOF', '# body' }, 1, 3) then
+          return
+        end
+        request('hover')
+        expect_text('safe')
+        calls = {}
+        vim.api.nvim_buf_set_lines(bufnr, 3, 3, false, { 'EOF' })
+        vim.api.nvim_win_set_cursor(0, { 3, 3 })
+        request('hover')
+        expect_text('body')
+        calls = {}
+        vim.api.nvim_buf_set_lines(bufnr, 3, 4, false, {})
+        request('hover')
+        assert.equals(0, #calls)
+        vim.api.nvim_win_set_cursor(0, { 1, 3 })
+        request('hover')
+        expect_text('safe')
+        calls = {}
+        vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, { 'python3 << OUTER' })
+        vim.api.nvim_win_set_cursor(0, { 2, 3 })
+        request('hover')
+        run('immersive')
+        assert.equals(0, #calls)
+      end)
+
+      it('does not restore a comment spanning disjoint root regions', function()
+        local input = { '" safe gap text', '" owned', 'py3 << EOF', '# hidden' }
+        if not prepare(input, 1, 3) then
+          return
+        end
+        request('hover')
+        expect_text('safe gap text')
+        calls = {}
+        local host = original_get_parser(bufnr)
+        host:set_included_regions({ { { 0, 0, 0, 5 }, { 0, 9, 1, 0 }, { 1, 0, 4, 0 } } })
+        request('hover')
+        assert.equals(0, #calls)
+        run('immersive')
+        expect_text('owned')
+      end)
+
+      it('retries a known failure when the host injection query changes', function()
+        if not prepare({ '" safe', 'py3 << EOF', '# hidden', 'EOF' }, 1, 3) then
+          return
+        end
+        local attempts = 0
+        vim.treesitter.get_string_parser = function()
+          attempts = attempts + 1
+          error('private fixture details')
+        end
+        request('hover')
+        expect_text('safe')
+        calls = {}
+        run('immersive')
+        expect_text('safe')
+        assert.equals(1, attempts)
+        calls = {}
+        original_get_parser(bufnr)._injection_query = query_api.parse('vim', '')
+        request('hover')
+        expect_text('safe')
+        assert.equals(2, attempts)
+      end)
+
+      it('retains whole-buffer suppression when no boundary can be established', function()
+        if not prepare({ '" safe', 'py3 << EOF', '"hidden"' }, 1, 3) then
+          return
+        end
+        local host = original_get_parser(bufnr)
+        vim.treesitter.get_parser = function()
+          return {
+            lang = function()
+              return 'vim'
+            end,
+            parse = function()
+              return host:parse(true)
+            end,
+            included_regions = function()
+              error('private fixture details')
+            end,
+          }
+        end
+        request('hover')
+        run('immersive')
+        assert.equals(0, #calls)
+        for _, message in ipairs(notifications) do
+          assert.is_nil(message:find('private fixture details', 1, true))
+        end
+      end)
+    end)
+
     for _, command in ipairs({ 'python3', 'py3' }) do
       for _, form in ipairs({
         { name = 'default marker', open = command .. ' <<', close = '.', prefix = '', indent = '' },
@@ -4722,7 +4956,7 @@ describe('parser target request boundary', function()
       it(
         'withholds requests after compatibility ' .. failure .. ' without revealing details',
         function()
-          if not prepare({ 'python3 << EOF', 'value = "# hidden"', 'EOF' }, 2, 11) then
+          if not prepare({ '" safe', 'python3 << EOF', 'value = "# hidden"', 'EOF' }, 3, 11) then
             return
           end
           local attempts = 0
@@ -4746,7 +4980,11 @@ describe('parser target request boundary', function()
           end
           request('hover')
           commands.enable_immersive(bufnr)
-          assert.equals(0, #calls)
+          expect_text('safe')
+          calls = {}
+          vim.api.nvim_win_set_cursor(0, { 1, 3 })
+          request('hover')
+          expect_text('safe')
           assert.equals(1, attempts)
           for _, message in ipairs(notifications) do
             assert.is_nil(message:find('private fixture details', 1, true))

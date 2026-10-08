@@ -174,13 +174,16 @@ local function recover_python3(bufnr, parser, trees)
   table.sort(candidates, function(a, b)
     return a.row < b.row
   end)
+  -- A preceding heredoc also needs recovery, so the first candidate bounds
+  -- safe host text even when a later candidate causes the failure.
+  local blocked_from = candidates[1].row
   local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
   local accepted, last_close = {}, -1
   for _, candidate in ipairs(candidates) do
     -- A malformed host tree can misclassify code inside an earlier heredoc.
     if candidate.row > last_close then
       if candidate.marker:find('%s') then
-        return finish(parser, true)
+        return finish(parser, blocked_from)
       end
       local closing
       for index = candidate.row + 2, #lines do
@@ -190,7 +193,7 @@ local function recover_python3(bufnr, parser, trees)
         end
       end
       if not closing then
-        return finish(parser, true)
+        return finish(parser, blocked_from)
       end
       candidate.closing = closing
       last_close = closing
@@ -215,7 +218,7 @@ local function recover_python3(bufnr, parser, trees)
   local created, shadow =
     pcall(vim.treesitter.get_string_parser, table.concat(lines, '\n') .. '\n', 'vim', parser._opts)
   if not created then
-    return finish(parser, true)
+    return finish(parser, blocked_from)
   end
   local parsed, shadow_trees = pcall(function()
     -- Keep custom injection options and root coverage from the original parser.
@@ -227,7 +230,7 @@ local function recover_python3(bufnr, parser, trees)
     return shadow:parse(true)
   end)
   if not parsed or not shadow_trees or not shadow_trees[1] then
-    return finish(parser, true)
+    return finish(parser, blocked_from)
   end
   local confirmed = {}
   local function confirm(node)
@@ -252,7 +255,7 @@ local function recover_python3(bufnr, parser, trees)
   for _, candidate in ipairs(accepted) do
     local proof = confirmed[candidate.row]
     if not proof or proof.col ~= candidate.col or proof.closing ~= candidate.closing then
-      return finish(parser, true)
+      return finish(parser, blocked_from)
     end
   end
   return finish(shadow)
@@ -699,6 +702,31 @@ local function contains(outer, inner)
     and not before(outer[3], outer[4], inner[3], inner[4])
 end
 
+local function safe_prefix_target(node, blocked_from, included)
+  local range = { node:range() }
+  if not contains({ 0, 0, blocked_from, 0 }, range) then
+    return false
+  end
+  local ancestor = node
+  -- The root can be erroneous solely because of the later heredoc. All
+  -- other ancestors must prove the selected host target's classification.
+  while ancestor:parent() do
+    if ancestor:has_error() then
+      return false
+    end
+    ancestor = ancestor:parent()
+  end
+  if #included == 0 then
+    return true
+  end
+  for _, region in ipairs(included) do
+    if contains(region, range) then
+      return true
+    end
+  end
+  return false
+end
+
 local function included_ranges(cache, language_tree, tree)
   local by_tree = cache[language_tree]
   if not by_tree then
@@ -942,7 +970,7 @@ end
 ---@return string?, string?, boolean handled, table? fallback_range
 function M.get_text_at_position(bufnr, row, col)
   local parser, blocked = get_parser(bufnr)
-  if blocked then
+  if blocked == true or (blocked and row >= blocked) then
     return nil, nil, true
   end
   if not parser then
@@ -998,6 +1026,9 @@ function M.get_text_at_position(bufnr, row, col)
     end
     local included = effective_ranges(range_cache, language_tree, tree, parent_ranges)
     if target then
+      if blocked and not safe_prefix_target(target, blocked, included) then
+        return nil, nil, true
+      end
       if not config.config.targets[category] then
         return nil, nil, true
       end
@@ -1033,6 +1064,11 @@ function M.get_text_at_position(bufnr, row, col)
       return get_target_text(target, bufnr, language_tree ~= parser),
         language_tree == parser and node:type() or category,
         true
+    end
+    if blocked then
+      -- A known compatibility boundary permits host targets only, never
+      -- injected classifications or regex fallback in unparsed content.
+      return nil, nil, true
     end
 
     -- Coverage ownership needs every parent tree, even when the cursor has
@@ -1096,7 +1132,7 @@ function M.get_all_comments(bufnr)
     return {}, true, {}
   end
   local parser, blocked = get_parser(bufnr)
-  if blocked then
+  if blocked == true then
     return {}, true, {}
   end
   if not parser then
@@ -1165,7 +1201,13 @@ function M.get_all_comments(bufnr)
       end
 
       local function traverse(node)
+        if blocked and node:start() >= blocked then
+          return
+        end
         if comment_node_types[node:type()] then
+          if blocked and not safe_prefix_target(node, blocked, included) then
+            return
+          end
           local candidate =
             dockerfile_candidate(language_tree, tree, node:start(), bufnr, dockerfile_cache)
           if candidate then
@@ -1194,7 +1236,7 @@ function M.get_all_comments(bufnr)
         end
 
         local range = opaque_node_range(node)
-        if range and not inside_host_target(node) then
+        if range and not blocked and not inside_host_target(node) then
           local ranges = #ancestors > 0 and intersect(range, candidates(range)) or { range }
           for _, clipped in ipairs(ranges) do
             table.insert(opaque, { range = clipped, language_tree = language_tree })
@@ -1205,6 +1247,9 @@ function M.get_all_comments(bufnr)
         end
       end
       traverse(tree:root())
+    end
+    if blocked then
+      return
     end
 
     table.insert(ancestors, { language_tree = language_tree, index = index, trees = trees })
