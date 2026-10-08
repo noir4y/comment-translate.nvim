@@ -31,6 +31,35 @@ local block_comment_delimiters = {
   { '<!%-%-', '%-%->', '<!--', '-->' }, -- HTML/XML
 }
 
+-- Optional half-open Tree-sitter range, with zero-based rows and byte columns.
+local function clip_line(text, row, range)
+  if not text then
+    return nil, 0
+  end
+  if not range then
+    return text, 0
+  end
+  if row < range[1] or row > range[3] then
+    return nil, 0
+  end
+  local start_col = row == range[1] and range[2] or 0
+  local end_col = row == range[3] and range[4] or #text
+  return text:sub(start_col + 1, end_col), start_col
+end
+
+local function line_at_cursor(bufnr, row, col, range, comment_end)
+  local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+  local clipped, offset = clip_line(text, row, range)
+  local at_comment_end = comment_end and clipped and col == #text and col == offset + #clipped
+  if
+    not clipped
+    or (col and range and (col < offset or (col >= offset + #clipped and not at_comment_end)))
+  then
+    return nil
+  end
+  return clipped, col and (col - offset) or nil
+end
+
 ---@param line_text string
 ---@return string
 local function clean_block_comment_line(line_text)
@@ -79,23 +108,26 @@ local function check_block_end(line_text, delimiter_index)
 end
 
 ---@param bufnr number
+---@param range? table Half-open range; block state is local to this range.
 ---@return table<number, string>
-function M.get_all_comments(bufnr)
+function M.get_all_comments(bufnr, range)
   if not config.config.targets.comment then
     return {}
   end
 
   local comments = {}
   local line_count = vim.api.nvim_buf_line_count(bufnr)
-  local lines = vim.api.nvim_buf_get_lines(bufnr, 0, line_count, false)
+  local start_row = range and range[1] or 0
+  local end_row = range and math.min(range[3] + 1, line_count) or line_count
+  local lines = vim.api.nvim_buf_get_lines(bufnr, start_row, end_row, false)
 
   local in_block = false
   local block_delimiter_index = nil
   local block_start_line = nil
   local block_content_lines = {}
 
-  for line_idx = 0, line_count - 1 do
-    local line_text = lines[line_idx + 1]
+  for line_idx = start_row, end_row - 1 do
+    local line_text = clip_line(lines[line_idx - start_row + 1], line_idx, range)
     if not line_text then
       goto continue
     end
@@ -185,18 +217,20 @@ end
 ---@param bufnr number
 ---@param line number
 ---@param col? number 0-based byte column. When provided, inline comments must contain the cursor.
+---@param range? table
 ---@return string?
-function M.get_comment_at_line(bufnr, line, col)
+function M.get_comment_at_line(bufnr, line, col, range)
   if not config.config.targets.comment then
     return nil
   end
 
-  local line_text = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
+  local line_text, local_col = line_at_cursor(bufnr, line, col, range, true)
   if not line_text then
     return nil
   end
 
-  local target_col = col and (col + 1) or nil
+  -- An insertion cursor can sit just after a comment at physical end of line.
+  local target_col = local_col and (local_col == #line_text and local_col or local_col + 1) or nil
 
   for _, pattern in ipairs(line_comment_patterns) do
     local comment = line_text:match(pattern)
@@ -255,18 +289,19 @@ end
 ---@param bufnr number
 ---@param line number
 ---@param col number
+---@param range? table
 ---@return string?
-function M.get_string_at_position(bufnr, line, col)
+function M.get_string_at_position(bufnr, line, col, range)
   if not config.config.targets.string then
     return nil
   end
 
-  local line_text = vim.api.nvim_buf_get_lines(bufnr, line, line + 1, false)[1]
+  local line_text, local_col = line_at_cursor(bufnr, line, col, range)
   if not line_text then
     return nil
   end
 
-  local target_col = (col or 0) + 1
+  local target_col = (local_col or 0) + 1
 
   for _, delimiter in ipairs(string_delimiters) do
     local match = get_delimited_string_at_col(line_text, delimiter, target_col)

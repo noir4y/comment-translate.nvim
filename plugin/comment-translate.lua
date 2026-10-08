@@ -2,8 +2,8 @@ if vim.g.loaded_comment_translate then
   return
 end
 
-if vim.fn.has('nvim-0.8') == 0 then
-  vim.api.nvim_err_writeln('comment-translate.nvim requires Neovim 0.8 or later')
+if vim.fn.has('nvim-0.10') == 0 then
+  vim.api.nvim_err_writeln('comment-translate.nvim requires Neovim 0.10 or later')
   return
 end
 

@@ -9,7 +9,7 @@ A Neovim plugin for translating comments, strings, and selected text.
 
 REQUIREMENTS                                    *comment-translate-requirements*
 
-- Neovim 0.8+
+- Neovim 0.10+
 - plenary.nvim (required)
 - Tree-sitter parser support for the languages you want to inspect
   (recommended)
@@ -180,11 +180,13 @@ Options:
     Default: 5000
 
 *comment-translate.targets.comment*
-    Enable comment detection as a translation target.
+    Enable comment detection for hover and immersive translation.
+    See |comment-translate-parsing| for fallback behavior.
     Default: true
 
 *comment-translate.targets.string*
-    Enable string detection as a translation target.
+    Enable string detection for hover translation.
+    Selection replacement uses the explicit selection independently of targets.
     Default: true
 
 *comment-translate.keymaps.hover_manual*
@@ -254,6 +256,114 @@ to all buffers you switch to. Toggling OFF disables it for all buffers.
 Selection Replacement~
 Select text in visual mode, then run `:CommentTranslateReplace` or
 press <leader>tr to replace with translation.
+
+PARSING AND TARGETS                              *comment-translate-parsing*
+
+Hover detection uses targets.comment and targets.string. Immersive mode
+translates comments only and uses targets.comment. Selection replacement
+translates explicitly selected text independently of these detection settings.
+With automatic hover enabled, detected text can be submitted on CursorHold or
+CursorHoldI; manual hover submits it when invoked.
+
+A successful Tree-sitter parse is authoritative: excluded targets and a buffer
+with no comments are not reclassified by regex. If parsing is unavailable or fails,
+regex fallback remains available and uses the target settings.
+At an end-of-line insertion position, hover can resolve the preceding comment;
+this does not extend string detection beyond its node. Quoted-node extraction
+is restricted to the classified string node, including quoted content in
+Bash heredoc bodies, PHP nowdoc bodies, Vim assignment heredoc bodies,
+YAML block or plain string scalars, SQL literals, Dockerfile JSON instruction
+arguments, and PHP interpolated strings. Dockerfile COPY/ADD compatibility uses a
+parsed command token to validate its arguments on the same line, including compact
+JSON arrays and quoted paths containing # that older grammars misparse.
+Only complete single/double quoted fragments in valid path arguments are
+extracted; options, unquoted paths, and heredoc markers are excluded. Dockerfile
+escape directives are respected, and JSON forms keep JSON backslash escapes.
+Inline # in COPY/ADD arguments is data, so misparsed comments there are withheld
+from hover and immersive detection, including when string targets are disabled.
+This also applies to logical continuation rows under either escape directive;
+genuine full-line comments are preserved. Continuation rows retain parsed
+path-node extraction; recovery from grammar errors stays on the command's own line.
+Recovery cannot span gaps in the command's owning parse regions.
+Nowdoc and assignment heredoc extraction
+keeps the existing line-based quoted fragment and requires a complete enclosing
+node; it does not submit the whole body. With a PHP
+parser, hovering on an interpolation or its outer quote extracts the selected
+string node's complete content, including inner quotes and newlines. Outer quotes
+and an optional b/B prefix are removed; escape sequences remain unchanged.
+Literal fragments and strings inside an interpolation keep their existing
+nearest-node selection. Incomplete or erroneous selected string nodes are not
+extracted, and disabling targets.string suppresses extraction. Without a PHP
+parser, regex extraction remains line-based and may truncate nested quotes.
+
+Injected languages are parsed on first use. A host comment or string keeps its
+existing translation unit and target category, including strings used by
+vim.cmd. In Vim language heredocs, Markdown fenced or indented code, metadata,
+HTML blocks, inline content and table cells, HTML script/style content, Astro
+frontmatter, and Dockerfile shell fragments and RUN heredoc bodies, a missing
+injected parser or injection query allows regex fallback only within the unparsed
+embedded content. Unparsed fallback excludes Markdown metadata
+and heredoc delimiters. Hover and immersive fallback both subtract
+parsed child coverage, including partial coverage on the same line. Block
+comments cannot cross fallback ranges.
+Hover chooses injected languages by their individual included regions, so gaps
+between combined regions remain available to the host or another injected language.
+Nested targets and unparsed content are clipped to their owning parent tree's
+regions at each level; regions from separate parent trees are not pooled.
+Immersive ancestor exclusions use those same effective owning regions.
+When a nested query extends beyond provable parent ownership, its parsed overlap
+is withheld from fallback rather than extracted.
+A child owned by another parent does not suppress fallback in a sibling tree.
+Targets spanning disjoint combined injection regions are not submitted, because
+extracting their contiguous text could include intervening host code.
+
+In Vim buffers, python3 and py3 heredocs, including trim, are also detected with
+older Vim grammars. Detection preserves buffer text and byte positions. With
+trim, the closing marker's indentation must match the opening command's
+indentation exactly, including tabs. Without trim, the marker must occupy its
+own unindented line. A missing marker or known compatibility failure preserves
+only complete host comments and strings before the first heredoc requiring
+recovery, subject to the target settings. The target must fit within one owning
+parse region and have no erroneous non-root ancestor. The header line and
+everything after it, erroneous prefix targets, and injected content remain
+withheld; unparsed prefix content does not use regex fallback. An unexpected
+compatibility error without a proven boundary still withholds hover and
+immersive requests for the entire buffer.
+
+Regex detection is approximate and can mistake delimiters inside strings for
+comments. Unparsed Markdown inline content and table cells also retain regex
+detection of quoted text or comment-like delimiters in ordinary prose, including
+automatic hover and immersive comment detection. Install the relevant parsers and
+injection queries for more precise detection; target settings alone cannot resolve
+ambiguous syntax in unparsed text.
+
+DEVELOPMENT                                     *comment-translate-development*
+
+Setup test dependencies with `make deps`. Run `make test-real-parsers` for the
+full strict suite, or use FILE=tests/parser_targets_spec.lua (or
+FILE=tests/parser_spec.lua) with that target for focused parser verification.
+CI runs strict tests on Neovim 0.10.0, stable, and nightly. Missing required
+parsers, load failures, and pending cases fail strict tests. Summaries report
+executed and pending counts separately.
+
+Setup requires git, curl, gzip, tar, a C compiler, and Node (CI uses Node 22).
+It fetches fixed test-only nvim-treesitter tooling, its locked grammar revisions
+and matching queries/helpers, and Tree-sitter CLI 0.25.10 for Swift generation
+with ABI 14.
+All 25 fixture languages are installed under /tmp/comment-translate-test-deps
+by default; override this with TEST_DEPS_DIR. Personal parser installations are
+excluded from strict tests. Setup does not install into your Neovim configuration.
+These are development dependencies only; the plugin does not require
+nvim-treesitter or a Tree-sitter CLI at runtime. Initial setup needs network
+access; subsequent runs reuse fixed artifacts. Setup rejects foreign or stale
+query/helper cache entries; select a fresh TEST_DEPS_DIR in that case.
+Translation requests in tests use fakes and do not contact translation services.
+
+Use `make test` or `make test-file FILE=tests/parser_targets_spec.lua` for quick
+checks. Optional parsers and queries can be supplied with
+COMMENT_TRANSLATE_TEST_RTP. Pending real-parser cases remain unverified even
+when also counted as Success. Use NVIM=/path/to/nvim to select a test executable.
+Other checks: `make fmt-check`, `make lint`, and `make docs`.
 
 TROUBLESHOOTING                                 *comment-translate-troubleshooting*
 
