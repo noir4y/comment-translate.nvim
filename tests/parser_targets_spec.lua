@@ -3719,6 +3719,11 @@ describe('parser target request boundary', function()
           return setmetatable({ host }, { __mode = 'v' })
         end
         local weak = release_host()
+        -- Compiled traces can retain references independently of the cache.
+        local jit_runtime = rawget(_G, 'jit')
+        if jit_runtime then
+          jit_runtime.flush()
+        end
         collectgarbage('collect')
         collectgarbage('collect')
         assert.is_true(weak[1] == nil)
