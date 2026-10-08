@@ -280,14 +280,326 @@ local function get_parser(bufnr)
   return result, blocked
 end
 
-local function find_target(node)
+local function dockerfile_escape(node, bufnr)
+  while node:parent() do
+    node = node:parent()
+  end
+  local next_row = node:start()
+  for child in node:iter_children() do
+    local row = child:start()
+    if child:type() ~= 'comment' or row ~= next_row then
+      break
+    end
+    local text = vim.treesitter.get_node_text(child, bufnr)
+    local name, value = text:match('^#%s*([%a]+)%s*=%s*(.-)%s*$')
+    name = name and name:lower()
+    if name == 'escape' and (value == '\\' or value == '`') then
+      return value
+    end
+    if name ~= 'syntax' and name ~= 'check' then
+      break
+    end
+    next_row = row + 1
+  end
+  return '\\'
+end
+
+local function dockerfile_path_range(node, row, col, bufnr)
+  local kind = node:type()
+  if
+    (kind ~= 'copy_instruction' and kind ~= 'add_instruction')
+    or not row
+    or not col
+    or node:has_error()
+  then
+    return nil
+  end
+  -- This grammar splits quoted paths at whitespace. Join only consecutive
+  -- path nodes on the cursor's line, excluding options, comments and heredocs.
+  local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ''
+  local escape = dockerfile_escape(node, bufnr)
+  local range
+  local function selected()
+    if not range or col < range[2] or col >= range[4] then
+      return nil
+    end
+    local quote_escape = escape
+    if line:sub(range[2] + 1, range[2] + 1) == '[' then
+      local ok, json = pcall(vim.json.decode, line:sub(range[2] + 1, range[4]))
+      if ok and type(json) == 'table' then
+        -- JSON strings retain backslash escapes regardless of shell directives.
+        quote_escape = '\\'
+      end
+    end
+    local pos = range[2] + 1
+    while pos <= range[4] do
+      local char = line:sub(pos, pos)
+      if char == quote_escape then
+        pos = pos + 2
+      elseif char == '"' or char == "'" then
+        local first, quote = pos, char
+        pos = pos + 1
+        while pos <= range[4] do
+          char = line:sub(pos, pos)
+          if quote == '"' and char == quote_escape then
+            pos = pos + 2
+          elseif char == quote then
+            if col >= first - 1 and col < pos then
+              return { row, first - 1, row, pos }
+            end
+            break
+          else
+            pos = pos + 1
+          end
+        end
+        pos = pos + 1
+      else
+        pos = pos + 1
+      end
+    end
+  end
+  for child in node:iter_children() do
+    local sr, sc, er, ec = child:range()
+    if child:type() == 'path' and sr == row and er == row and line:sub(sc + 1, sc + 2) ~= '<<' then
+      range = range or { sr, sc, er, ec }
+      range[4] = ec
+    else
+      local selected_range = selected()
+      if selected_range then
+        return selected_range
+      end
+      range = nil
+    end
+  end
+  return selected() or nil
+end
+
+local function dockerfile_command(node, root, bufnr, escape)
+  local row, col, _, finish = node:range()
+  local root_row, root_col = root:start()
+  local first = row == root_row and root_col or 0
+  local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ''
+  local prefix = line:sub(first + 1, col):upper()
+  return (prefix:match('^[ \t]*$') or prefix:match('^[ \t]*ONBUILD[ \t]+$'))
+    and (
+      line:sub(finish + 1, finish + 1):match('[ \t]')
+      or line:sub(finish + 1):gsub('[ \t]+$', '') == escape
+    )
+end
+
+local function dockerfile_candidate(language_tree, tree, row, bufnr, cache)
+  if not tree or not language_tree.lang or language_tree:lang() ~= 'dockerfile' then
+    return nil
+  end
+  if not cache[tree] then
+    local commands, continued, tokens = {}, {}, {}
+    local root = tree:root()
+    local escape = dockerfile_escape(root, bufnr)
+    local function index(node)
+      local kind = node:type()
+      if kind == 'COPY' or kind == 'ADD' then
+        if dockerfile_command(node, root, bufnr, escape) then
+          local command_row = node:start()
+          commands[command_row] = commands[command_row] or {}
+          table.insert(commands[command_row], node)
+          table.insert(tokens, node)
+        end
+      elseif
+        kind == 'source_file'
+        or kind == 'ERROR'
+        or kind == 'copy_instruction'
+        or kind == 'add_instruction'
+        or kind == 'onbuild_instruction'
+      then
+        for child in node:iter_children() do
+          index(child)
+        end
+      end
+    end
+    index(root)
+    local _, _, end_row, end_col = root:range()
+    -- The grammar knows only backslash continuations. Track Docker's actual
+    -- escape directive within this tree, without permitting new extraction.
+    for _, token in ipairs(tokens) do
+      local command_row = token:start()
+      if not continued[command_row] then
+        local next_row = command_row
+        while next_row <= end_row do
+          local next_line = vim.api.nvim_buf_get_lines(bufnr, next_row, next_row + 1, false)[1]
+            or ''
+          if next_row == end_row then
+            next_line = next_line:sub(1, end_col)
+          end
+          if next_row > command_row then
+            continued[next_row] = token
+          end
+          if
+            next_row == command_row
+            or (not next_line:match('^[ \t]*#') and not next_line:match('^[ \t]*$'))
+          then
+            local tail = next_line:gsub('[ \t]+$', '')
+            if tail:sub(-1) ~= escape or tail:sub(-2, -2) == escape then
+              break
+            end
+          end
+          next_row = next_row + 1
+        end
+      end
+    end
+    cache[tree] = { commands = commands, continued = continued }
+  end
+  if cache[tree][row] ~= nil then
+    return cache[tree][row] or nil
+  end
+  local root = tree:root()
+  local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ''
+  local root_row, root_col, end_row, end_col = root:range()
+  local first = root_row == row and root_col or 0
+  local last = end_row == row and math.min(end_col, #line) or #line
+  local borrowed = cache[tree].continued[row]
+  if borrowed and line:sub(first + 1, last):match('^[ \t]*#') then
+    cache[tree][row] = false
+    return nil
+  end
+  local commands = cache[tree].commands[row]
+  local command = borrowed or (commands and commands[#commands])
+  if not command then
+    cache[tree][row] = false
+    return nil
+  end
+  local start_col = borrowed and first or select(2, command:end_())
+  local function skip_space(col)
+    while col < last and line:sub(col + 1, col + 1):match('[ \t]') do
+      col = col + 1
+    end
+    return col
+  end
+  start_col = skip_space(start_col)
+  local escape = dockerfile_escape(root, bufnr)
+  local candidate = {
+    command = command,
+    proof = { row, select(2, command:start()), row, last },
+    quotes = {},
+    valid = true,
+    borrowed = borrowed ~= nil and borrowed ~= false,
+  }
+  local function word_end(pos, option)
+    local marker = line:sub(pos, pos + 1) == '<<'
+    while pos <= last do
+      local char = line:sub(pos, pos)
+      if char:match('[ \t]') then
+        break
+      end
+      if char == escape then
+        candidate.valid = candidate.valid and pos < last
+        pos = pos + 2
+      elseif char == '"' or char == "'" then
+        local opening, quote = pos, char
+        pos = pos + 1
+        while pos <= last do
+          char = line:sub(pos, pos)
+          if (quote == '"' or option) and char == escape then
+            pos = pos + 2
+          elseif char == quote then
+            break
+          else
+            pos = pos + 1
+          end
+        end
+        table.insert(candidate.quotes, {
+          row,
+          opening - 1,
+          row,
+          math.min(pos, last),
+          excluded = option or marker,
+        })
+        candidate.valid = candidate.valid and pos <= last
+        pos = pos + 1
+      else
+        pos = pos + 1
+      end
+    end
+    return pos
+  end
+  local pos = start_col + 1
+  -- The grammar truncates quoted options at spaces and misses boolean flags.
+  -- Lex complete leading flag words, retaining their quotes only to suppress
+  -- false comments; option values are never eligible string targets.
+  while pos <= last and line:sub(pos, pos + 1) == '--' do
+    local first_option, finish = pos, word_end(pos, true)
+    pos = skip_space(finish - 1) + 1
+    if line:sub(first_option, finish - 1) == '--' then
+      break
+    end
+  end
+  start_col = pos - 1
+  local json_form = line:sub(pos, pos) == '['
+  escape = json_form and '\\' or escape
+  local words = 0
+  while pos <= last do
+    words = words + 1
+    pos = skip_space(word_end(pos, false) - 1) + 1
+  end
+  if json_form then
+    local ok, json = pcall(vim.json.decode, line:sub(start_col + 1, last))
+    candidate.valid = candidate.valid and ok and type(json) == 'table' and #json >= 2
+    if candidate.valid then
+      for _, value in ipairs(json) do
+        candidate.valid = candidate.valid and type(value) == 'string'
+      end
+    end
+  else
+    candidate.valid = candidate.valid and words >= 2
+  end
+  -- A valid parsed instruction may continue its destination on another line.
+  -- Keep its existing path-node extraction; error recovery stays single-line.
+  local parent = command:parent()
+  candidate.continued = not json_form
+    and line:sub(last, last) == escape
+    and not parent:has_error()
+    and select(1, parent:end_()) > row
+  cache[tree][row] = candidate
+  return candidate
+end
+
+local function find_target(node, row, col, bufnr, candidate)
+  if candidate then
+    for _, range in ipairs(candidate.quotes) do
+      if col >= range[2] and col < range[4] then
+        if range.excluded then
+          return nil, nil, nil, true
+        end
+        -- Continuation rows use proven path nodes for extraction. The command
+        -- context is retained here only to withhold misparsed quoted comments.
+        if candidate.borrowed then
+          break
+        end
+        if not candidate.valid then
+          if candidate.continued then
+            break
+          end
+          return nil, nil, nil, true
+        end
+        return candidate.command, 'string', range
+      end
+    end
+  end
   while node do
     local kind = node:type()
     if comment_node_types[kind] then
+      -- Docker treats inline # in COPY/ADD arguments as data. Full-line
+      -- comments never receive a candidate, including on continuation rows.
+      if candidate then
+        return nil, nil, nil, true
+      end
       return node, 'comment'
     end
     if string_node_types[kind] or is_quoted_node(node) then
       return node, 'string'
+    end
+    local path_range = dockerfile_path_range(node, row, col, bufnr)
+    if path_range then
+      return node, 'string', path_range
     end
     node = node:parent()
   end
@@ -640,6 +952,7 @@ function M.get_text_at_position(bufnr, row, col)
   -- Cache raw regions only for this fully parsed request. Parent clipping is
   -- context-dependent and must still be computed for each use.
   local range_cache = {}
+  local dockerfile_cache = {}
   local range = { row, col, row, col + 1 }
   local line = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
   local previous_range = col > 0 and line and col == #line and { row, col - 1, row, col } or nil
@@ -654,14 +967,25 @@ function M.get_text_at_position(bufnr, row, col)
   local function resolve(language_tree, parent_ranges, ownership_ranges)
     local tree = tree_at(language_tree, range, parent_ranges)
     local node = tree and tree:root():named_descendant_for_range(row, col, row, col)
-    local target, category = find_target(node)
+    local path_candidate = dockerfile_candidate(language_tree, tree, row, bufnr, dockerfile_cache)
+    local target, category, target_range, withheld =
+      find_target(node, row, col, bufnr, path_candidate)
+    if withheld then
+      return nil, nil, true
+    end
     -- Insert-mode EOL lies at a comment's half-open end. Resolve only comments
     -- (or unparsed embedded content) there; do not expand string/code targets.
     if not target and previous_range then
       local previous_tree = tree_at(language_tree, previous_range, parent_ranges)
       local previous_node = previous_tree
         and previous_tree:root():named_descendant_for_range(row, col - 1, row, col - 1)
-      local previous_target, previous_category = find_target(previous_node)
+      local previous_candidate =
+        dockerfile_candidate(language_tree, previous_tree, row, bufnr, dockerfile_cache)
+      local previous_target, previous_category, _, previous_withheld =
+        find_target(previous_node, row, col - 1, bufnr, previous_candidate)
+      if previous_withheld then
+        return nil, nil, true
+      end
       if previous_category == 'comment' then
         local end_row, end_col = previous_target:end_()
         if end_row == row and end_col == col then
@@ -677,14 +1001,21 @@ function M.get_text_at_position(bufnr, row, col)
       if not config.config.targets[category] then
         return nil, nil, true
       end
-      if language_tree ~= parser then
+      if language_tree ~= parser or (#included > 0 and target_range) then
         local contained = false
         for _, region in ipairs(included) do
-          contained = contained or contains(region, { target:range() })
+          local proof = path_candidate and target == path_candidate.command and path_candidate.proof
+            or target_range
+            or { target:range() }
+          contained = contained or contains(region, proof)
         end
         if not contained then
           return nil, nil, true
         end
+      end
+      if target_range then
+        local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1]
+        return text and text:sub(target_range[2] + 2, target_range[4] - 1), 'string', true
       end
       if target:type() == 'encapsed_string' then
         -- PHP interpolation may contain quotes and span lines. Its parser
@@ -772,7 +1103,7 @@ function M.get_all_comments(bufnr)
     return {}, false, {}
   end
 
-  local comments, opaque, coverage, range_cache = {}, {}, {}, {}
+  local comments, opaque, coverage, range_cache, dockerfile_cache = {}, {}, {}, {}, {}
   local ancestors = {}
   local function inside_host_target(node)
     local row, col = node:start()
@@ -790,7 +1121,9 @@ function M.get_all_comments(bufnr)
         end
       end
       local host_node = tree and tree:root():named_descendant_for_range(row, col, row, col)
-      if find_target(host_node) then
+      local candidate = dockerfile_candidate(host, tree, row, bufnr, dockerfile_cache)
+      local target, _, _, withheld = find_target(host_node, row, col, bufnr, candidate)
+      if target or withheld then
         return true
       end
     end
@@ -833,6 +1166,11 @@ function M.get_all_comments(bufnr)
 
       local function traverse(node)
         if comment_node_types[node:type()] then
+          local candidate =
+            dockerfile_candidate(language_tree, tree, node:start(), bufnr, dockerfile_cache)
+          if candidate then
+            return
+          end
           if inside_host_target(node) then
             return
           end

@@ -1450,6 +1450,994 @@ describe('parser target request boundary', function()
     end
   end
 
+  for _, profile in ipairs({ 'parser only', 'native queries' }) do
+    for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+      for _, quote in ipairs({ '"', "'" }) do
+        for _, flow in ipairs({ 'hover', 'manual', 'auto', 'insert' }) do
+          it(
+            'keeps Dockerfile '
+              .. instruction
+              .. ' quoted paths bounded via '
+              .. flow
+              .. ' ('
+              .. profile
+              .. ', '
+              .. quote
+              .. ')',
+            function()
+              if not require_language('dockerfile') then
+                return
+              end
+              if profile == 'parser only' then
+                query('dockerfile', '')
+              end
+              local prefix = instruction .. ' '
+              local body = 'こんにちは world'
+              local source = quote .. body .. quote
+              local destination = '/行き先 世界/'
+              local middle = ' plain '
+              local dest_prefix = prefix .. source .. middle
+              local line = dest_prefix .. quote .. destination .. quote
+              if not fixture('dockerfile', { line }, 1, #prefix + #quote) then
+                return
+              end
+              config.setup({ targets = { comment = false, string = true } })
+              request(flow)
+              expect_text(body)
+              local root = original_get_parser(bufnr):trees()[1]:root()
+              assert.is_false(root:has_error())
+              local node = root:named_descendant_for_range(0, #prefix + 1, 0, #prefix + 1)
+              assert.equals('path', node:type())
+              assert.equals(instruction:lower() .. '_instruction', node:parent():type())
+
+              calls = {}
+              for _, col in ipairs({
+                #prefix,
+                #prefix + #quote + #'こんにちは',
+                #prefix + #source - 1,
+              }) do
+                vim.api.nvim_win_set_cursor(0, { 1, col })
+                request(flow)
+                expect_text(body)
+                calls = {}
+              end
+              vim.api.nvim_win_set_cursor(0, { 1, #dest_prefix + #quote })
+              request(flow)
+              expect_text(destination)
+
+              calls = {}
+              config.setup({ targets = { comment = true, string = false } })
+              for _, col in ipairs({ #prefix + #quote + #'こんにちは ', #dest_prefix + #quote }) do
+                vim.api.nvim_win_set_cursor(0, { 1, col })
+                request(flow)
+              end
+              commands.enable_immersive(bufnr)
+              assert.equals(0, #calls)
+              config.setup({ targets = { comment = false, string = false } })
+              request(flow)
+              assert.equals(0, #calls)
+
+              config.setup({ targets = { comment = true, string = true } })
+              for _, col in ipairs({
+                0,
+                #instruction,
+                #prefix + #source,
+                #prefix + #source + 2,
+                #dest_prefix - 1,
+                #line,
+              }) do
+                vim.o.virtualedit = 'onemore'
+                vim.api.nvim_win_set_cursor(0, { 1, col })
+                request(flow)
+              end
+              commands.update_immersive(bufnr)
+              assert.equals(0, #calls)
+              vim.api.nvim_win_set_cursor(0, { 1, #prefix + #quote })
+              request(flow)
+              expect_text(body)
+
+              calls = {}
+              vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { prefix .. 'plain /app/' })
+              for _, col in ipairs({ #prefix, #prefix + #'plain ' }) do
+                vim.api.nvim_win_set_cursor(0, { 1, col })
+                request(flow)
+              end
+              assert.equals(0, #calls)
+              config.setup({ targets = { comment = true, string = false } })
+              request(flow)
+              assert.equals(0, #calls)
+            end
+          )
+        end
+      end
+    end
+  end
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    for _, flow in ipairs({ 'hover', 'auto' }) do
+      it('limits Dockerfile ' .. instruction .. ' path recovery via ' .. flow, function()
+        if not require_language('dockerfile') then
+          return
+        end
+        query('dockerfile', '')
+        local option = instruction == 'COPY' and '--from="stage"' or '--checksum="value"'
+        local prefix = instruction .. ' ' .. option .. ' '
+        local body = 'こんにちは world'
+        if
+          not fixture('dockerfile', { prefix .. '"' .. body .. '" /app/' }, 1, #instruction + 10)
+        then
+          return
+        end
+        config.setup({ targets = { comment = false, string = true } })
+        request(flow)
+        assert.equals(0, #calls)
+        vim.api.nvim_win_set_cursor(0, { 1, #prefix + 1 })
+        request(flow)
+        expect_text(body)
+        assert.is_false(original_get_parser(bufnr):trees()[1]:root():has_error())
+
+        calls = {}
+        local json_prefix = instruction .. ' ["'
+        local destination = '/行き先 世界/'
+        if
+          not fixture(
+            'dockerfile',
+            { json_prefix .. body .. '", "' .. destination .. '"]' },
+            1,
+            #json_prefix
+          )
+        then
+          return
+        end
+        request(flow)
+        expect_text(body)
+        calls = {}
+        vim.api.nvim_win_set_cursor(0, { 1, #json_prefix + #body + #'", "' })
+        request(flow)
+        expect_text(destination)
+        assert.is_false(original_get_parser(bufnr):trees()[1]:root():has_error())
+        calls = {}
+        config.setup({ targets = { comment = true, string = false } })
+        request(flow)
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+
+        config.setup({ targets = { comment = false, string = true } })
+        if
+          not fixture(
+            'dockerfile',
+            { instruction .. ' "unfinished /app/', 'ENV OTHER="outside"' },
+            1,
+            #instruction + 2
+          )
+        then
+          return
+        end
+        request(flow)
+        assert.equals(0, #calls)
+        if
+          not fixture(
+            'dockerfile',
+            { instruction .. ' <<EOF /data', 'inside "hidden"', 'EOF' },
+            2,
+            #'inside "'
+          )
+        then
+          return
+        end
+        request(flow)
+        commands.update_immersive(bufnr)
+        assert.equals(0, #calls)
+      end)
+    end
+  end
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    it(
+      'preserves injected Dockerfile ' .. instruction .. ' path boundaries on first use',
+      function()
+        if not require_language('markdown') or not require_language('dockerfile') then
+          return
+        end
+        query(
+          'markdown',
+          '((fenced_code_block (code_fence_content) @injection.content)'
+            .. ' (#set! injection.language "dockerfile"))'
+        )
+        query('dockerfile', '')
+        local prefix = instruction .. ' "'
+        local body = 'こんにちは world'
+        local line = prefix .. body .. '" /app/'
+        if not fixture('markdown', { '```dockerfile', line, '```' }, 2, #prefix) then
+          return
+        end
+        config.setup({ targets = { comment = false, string = true } })
+        request('auto')
+        expect_text(body)
+        expect_child('dockerfile')
+        calls = {}
+        config.setup({ targets = { comment = true, string = false } })
+        request('auto')
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+        config.setup({ targets = { comment = true, string = true } })
+        for _, position in ipairs({ { 1, 0 }, { 2, 0 }, { 2, #prefix + #body + 3 }, { 3, 0 } }) do
+          vim.api.nvim_win_set_cursor(0, position)
+          request('auto')
+        end
+        commands.update_immersive(bufnr)
+        assert.equals(0, #calls)
+      end
+    )
+  end
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    for _, flow in ipairs({ 'hover', 'auto' }) do
+      it('rejects nonliteral Dockerfile ' .. instruction .. ' quotes via ' .. flow, function()
+        if not require_language('dockerfile') then
+          return
+        end
+        query('dockerfile', '')
+        config.setup({ targets = { comment = true, string = true } })
+        local prefix = instruction .. ' '
+        for _, escape in ipairs({ '\\', '`' }) do
+          local path = 'foo' .. escape .. '"unquoted"quoted"'
+          local lines = { '# escape=' .. escape, prefix .. path .. ' /app/' }
+          if not fixture('dockerfile', lines, 2, #prefix + #'foo' + #escape + 1) then
+            return
+          end
+          request(flow)
+          assert.equals(0, #calls)
+          vim.api.nvim_win_set_cursor(0, { 2, #prefix + #'foo' + #escape + #'"unquoted"' })
+          request(flow)
+          expect_text('quoted')
+          calls = {}
+          config.setup({ targets = { comment = true, string = false } })
+          request(flow)
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = false, string = false } })
+          commands.enable_immersive(bufnr)
+          assert.equals(0, #calls)
+          local json_body = [=[hello \"quoted\" world]=]
+          local json_prefix = instruction .. ' ["'
+          if
+            not fixture(
+              'dockerfile',
+              { lines[1], json_prefix .. json_body .. '", "/app/"]' },
+              2,
+              #json_prefix
+            )
+          then
+            return
+          end
+          config.setup({ targets = { comment = false, string = true } })
+          request(flow)
+          expect_text(json_body)
+          calls = {}
+          vim.api.nvim_win_set_cursor(0, { 2, #json_prefix + #'hello "' })
+          request(flow)
+          expect_text(json_body)
+          calls = {}
+          config.setup({ targets = { comment = true, string = false } })
+          request(flow)
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = false, string = false } })
+          request(flow)
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = true, string = true } })
+          vim.api.nvim_win_set_cursor(0, { 2, #json_prefix + #json_body + #'", "' })
+          request(flow)
+          expect_text('/app/')
+          calls = {}
+        end
+        if not fixture('dockerfile', { prefix .. '`unquoted` /app/' }, 1, #prefix + 1) then
+          return
+        end
+        request(flow)
+        assert.equals(0, #calls)
+        for _, quote in ipairs({ '"', "'" }) do
+          if
+            not fixture(
+              'dockerfile',
+              { prefix .. '<<' .. quote .. 'EOF' .. quote .. ' /data', 'body', 'EOF' },
+              1,
+              #prefix + 3
+            )
+          then
+            return
+          end
+          request(flow)
+          assert.equals(0, #calls)
+          assert.is_false(original_get_parser(bufnr):trees()[1]:root():has_error())
+        end
+        if
+          not fixture(
+            'dockerfile',
+            { prefix .. '"quoted source" plain <<"EOF" /data', 'body', 'EOF' },
+            1,
+            #prefix + 1
+          )
+        then
+          return
+        end
+        request(flow)
+        expect_text('quoted source')
+      end)
+    end
+  end
+
+  for _, profile in ipairs({ 'parser only', 'native queries' }) do
+    for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+      for _, form in ipairs({ 'compact JSON', 'hash path', 'hash JSON' }) do
+        for _, flow in ipairs({ 'hover', 'manual', 'auto', 'insert' }) do
+          it(
+            'recovers Dockerfile '
+              .. instruction
+              .. ' '
+              .. form
+              .. ' via '
+              .. flow
+              .. ' ('
+              .. profile
+              .. ')',
+            function()
+              if not require_language('dockerfile') then
+                return
+              end
+              if profile == 'parser only' then
+                query('dockerfile', '')
+              end
+              local prefix = instruction .. ' '
+              local body = form == 'compact JSON' and 'こんにちは' or 'こんにちは # world'
+              local destination = '/行き先 # 世界/'
+              local line = form == 'hash path'
+                  and prefix .. '"' .. body .. '" "' .. destination .. '"'
+                or prefix .. '["' .. body .. '","' .. destination .. '"]'
+              if
+                not fixture(
+                  'dockerfile',
+                  { line, '# genuine comment' },
+                  1,
+                  #prefix + (form == 'hash path' and 1 or 2)
+                )
+              then
+                return
+              end
+              config.setup({ targets = { comment = false, string = true } })
+              request(flow)
+              expect_text(body)
+              calls = {}
+              local dest_col = assert(line:find(destination, 1, true)) - 1
+              vim.api.nvim_win_set_cursor(0, { 1, dest_col })
+              request(flow)
+              expect_text(destination)
+              calls = {}
+              config.setup({ targets = { comment = true, string = false } })
+              request(flow)
+              assert.equals(0, #calls)
+              commands.enable_immersive(bufnr)
+              expect_text('genuine comment')
+              calls = {}
+              config.setup({ targets = { comment = false, string = false } })
+              request(flow)
+              commands.update_immersive(bufnr)
+              assert.equals(0, #calls)
+              config.setup({ targets = { comment = true, string = true } })
+              for _, col in ipairs({ 0, #instruction, #line }) do
+                vim.o.virtualedit = 'onemore'
+                vim.api.nvim_win_set_cursor(0, { 1, col })
+                request(flow)
+              end
+              assert.equals(0, #calls)
+            end
+          )
+        end
+      end
+    end
+  end
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    for _, quote in ipairs({ '"', "'" }) do
+      it(
+        'withholds misparsed Dockerfile ' .. instruction .. ' comment tails with ' .. quote,
+        function()
+          if not require_language('dockerfile') then
+            return
+          end
+          query('dockerfile', '')
+          local prefix = instruction .. ' ' .. quote
+          local body = 'こんにちは # world'
+          local line = prefix .. body .. quote .. ' /app/'
+          if not fixture('dockerfile', { line }, 1, #prefix + #'こんにちは # ') then
+            return
+          end
+          config.setup({ targets = { comment = true, string = true } })
+          request('auto')
+          expect_text(body)
+          calls = {}
+          vim.api.nvim_win_set_cursor(0, { 1, #line - #'/app/' })
+          request('auto')
+          commands.enable_immersive(bufnr)
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = true, string = false } })
+          vim.api.nvim_win_set_cursor(0, { 1, #prefix + #'こんにちは # ' })
+          request('auto')
+          assert.equals(0, #calls)
+          vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { prefix .. body, 'ENV OTHER="outside"' })
+          request('auto')
+          commands.update_immersive(bufnr)
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = true, string = true } })
+          request('auto')
+          commands.update_immersive(bufnr)
+          assert.equals(0, #calls)
+        end
+      )
+    end
+  end
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    for _, form in ipairs({ 'compact JSON', 'hash path' }) do
+      for _, first in ipairs({ 'hover', 'immersive' }) do
+        it(
+          'recovers injected ' .. instruction .. ' ' .. form .. ' with ' .. first .. ' first',
+          function()
+            if not require_language('markdown') or not require_language('dockerfile') then
+              return
+            end
+            query(
+              'markdown',
+              '((fenced_code_block (code_fence_content) @injection.content)'
+                .. ' (#set! injection.language "dockerfile"))'
+            )
+            query('dockerfile', '')
+            local prefix = instruction .. ' '
+            local body = 'こんにちは # world'
+            local line = form == 'compact JSON' and prefix .. '["' .. body .. '","/app/"]'
+              or prefix .. '"' .. body .. '" /app/'
+            local col = #prefix + (form == 'compact JSON' and 2 or 1)
+            if not fixture('markdown', { '```dockerfile', line, '```' }, 2, col) then
+              return
+            end
+            config.setup({ targets = { comment = true, string = false } })
+            if first == 'hover' then
+              request('auto')
+            else
+              commands.enable_immersive(bufnr)
+            end
+            assert.equals(0, #calls)
+            expect_child('dockerfile')
+            config.setup({ targets = { comment = false, string = true } })
+            request('auto')
+            expect_text(body)
+            calls = {}
+            vim.api.nvim_win_set_cursor(0, { 3, 0 })
+            request('auto')
+            assert.equals(0, #calls)
+          end
+        )
+      end
+    end
+  end
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    it('preserves parsed ' .. instruction .. ' paths before a line continuation', function()
+      if not require_language('dockerfile') then
+        return
+      end
+      query('dockerfile', '')
+      if not fixture('dockerfile', { instruction .. ' "hello world" \\', '  /app/' }, 1, 8) then
+        return
+      end
+      config.setup({ targets = { comment = true, string = true } })
+      request('auto')
+      expect_text('hello world')
+      calls = {}
+      config.setup({ targets = { comment = true, string = false } })
+      request('auto')
+      commands.enable_immersive(bufnr)
+      assert.equals(0, #calls)
+    end)
+
+    for _, prefix in ipairs({ instruction .. ' --chown="owner" ', 'ONBUILD ' .. instruction .. ' ' }) do
+      it('recovers compact JSON after ' .. prefix, function()
+        if not require_language('dockerfile') then
+          return
+        end
+        query('dockerfile', '')
+        local body = 'hello # world'
+        if
+          not fixture('dockerfile', { prefix .. '["' .. body .. '","/app/"]' }, 1, #prefix + 2)
+        then
+          return
+        end
+        config.setup({ targets = { comment = true, string = true } })
+        request('auto')
+        expect_text(body)
+        calls = {}
+        if prefix:find('--chown', 1, true) then
+          vim.api.nvim_win_set_cursor(0, { 1, #instruction + #' --chown="' })
+          request('auto')
+          assert.equals(0, #calls)
+        end
+        config.setup({ targets = { comment = true, string = false } })
+        vim.api.nvim_win_set_cursor(0, { 1, #prefix + 2 })
+        request('auto')
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+      end)
+    end
+
+    it('withholds invalid ' .. instruction .. ' JSON recovery', function()
+      if not require_language('dockerfile') then
+        return
+      end
+      query('dockerfile', '')
+      config.setup({ targets = { comment = true, string = true } })
+      for _, arguments in ipairs({
+        '["hello # world"]',
+        '["hello # world",null]',
+        '["hello # world","/app/"',
+        '["hello # world","/app/"] trailing',
+      }) do
+        local prefix = instruction .. ' ["'
+        if
+          not fixture('dockerfile', { instruction .. ' ' .. arguments }, 1, #prefix + #'hello # ')
+        then
+          return
+        end
+        request('auto')
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+      end
+    end)
+  end
+
+  it('withholds Dockerfile recovery across disjoint root regions', function()
+    if not require_language('dockerfile') then
+      return
+    end
+    query('dockerfile', '')
+    local first = 'COPY "hello '
+    local hole = 'HOST'
+    local last = ' world" /app/'
+    local line = first .. hole .. last
+    if not fixture('dockerfile', { line }, 1, #'COPY "') then
+      return
+    end
+    original_get_parser(bufnr):set_included_regions({
+      { { 0, 0, 0, #first }, { 0, #first + #hole, 0, #line } },
+    })
+    config.setup({ targets = { comment = true, string = true } })
+    request('auto')
+    commands.enable_immersive(bufnr)
+    assert.equals(0, #calls)
+  end)
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    for _, kind in ipairs({ 'path', 'option' }) do
+      it(
+        'withholds misparsed ' .. instruction .. ' quoted ' .. kind .. ' on a continuation row',
+        function()
+          if not require_language('dockerfile') then
+            return
+          end
+          query('dockerfile', '')
+          local line = kind == 'path' and '  "hello # world" /app/'
+            or '  --exclude="private # pattern" "src" /app/'
+          if not fixture('dockerfile', { instruction .. ' \\', line }, 2, #line - 7) then
+            return
+          end
+          for _, enabled in ipairs({ false, true }) do
+            config.setup({ targets = { comment = true, string = enabled } })
+            request('auto')
+            commands.enable_immersive(bufnr)
+            assert.equals(0, #calls)
+          end
+        end
+      )
+    end
+
+    it(
+      'preserves genuine comments and parsed ' .. instruction .. ' paths on continuation rows',
+      function()
+        if not require_language('dockerfile') then
+          return
+        end
+        query('dockerfile', '')
+        if
+          not fixture(
+            'dockerfile',
+            { instruction .. ' \\', '# genuine comment', '  "hello world" /app/' },
+            3,
+            4
+          )
+        then
+          return
+        end
+        config.setup({ targets = { comment = false, string = true } })
+        request('auto')
+        expect_text('hello world')
+        calls = {}
+        config.setup({ targets = { comment = true, string = false } })
+        request('auto')
+        assert.equals(0, #calls)
+        commands.enable_immersive(bufnr)
+        expect_text('genuine comment')
+        calls = {}
+        vim.api.nvim_buf_set_lines(bufnr, 2, 3, false, { '  "hello # world" /app/' })
+        request('auto')
+        assert.equals(0, #calls)
+        commands.update_immersive(bufnr)
+        expect_text('genuine comment')
+      end
+    )
+
+    for _, option in ipairs({
+      '--exclude="private # pattern"',
+      '--link --exclude="hidden"',
+      [[--exclude='private \' # pattern']],
+    }) do
+      it('excludes complete ' .. instruction .. ' option words: ' .. option, function()
+        if not require_language('dockerfile') then
+          return
+        end
+        query('dockerfile', '')
+        local body = 'source # body'
+        local prefix = instruction .. ' ' .. option .. ' '
+        local line = prefix .. '["' .. body .. '","/app/"]'
+        if not fixture('dockerfile', { line }, 1, #prefix + 2) then
+          return
+        end
+        config.setup({ targets = { comment = true, string = true } })
+        request('auto')
+        expect_text(body)
+        calls = {}
+        for _, col in ipairs({ assert(line:find('=', 1, true)) + 1, #prefix - 1 }) do
+          vim.api.nvim_win_set_cursor(0, { 1, col })
+          request('auto')
+        end
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+        config.setup({ targets = { comment = true, string = false } })
+        vim.api.nvim_win_set_cursor(0, { 1, #prefix + 2 })
+        request('auto')
+        commands.update_immersive(bufnr)
+        assert.equals(0, #calls)
+      end)
+    end
+
+    it('preserves ' .. instruction .. ' path fragments after the flag separator', function()
+      if not require_language('dockerfile') then
+        return
+      end
+      query('dockerfile', '')
+      local prefix, body = instruction .. ' -- --source="', 'hello # world'
+      if not fixture('dockerfile', { prefix .. body .. '" /app/' }, 1, #prefix + 7) then
+        return
+      end
+      config.setup({ targets = { comment = true, string = true } })
+      request('auto')
+      expect_text(body)
+      calls = {}
+      config.setup({ targets = { comment = true, string = false } })
+      request('auto')
+      commands.enable_immersive(bufnr)
+      assert.equals(0, #calls)
+    end)
+
+    for _, form in ipairs({ 'hash path', 'hash JSON' }) do
+      it(
+        'withholds ' .. instruction .. ' false comments at an injected region end: ' .. form,
+        function()
+          if not require_language('markdown') or not require_language('dockerfile') then
+            return
+          end
+          query(
+            'markdown',
+            '((fenced_code_block (code_fence_content) @injection.content)'
+              .. ' (#set! injection.language "dockerfile"))'
+          )
+          query('dockerfile', '')
+          local body = 'hello # world'
+          local prefix = instruction .. ' '
+          local line = form == 'hash path' and prefix .. '"' .. body .. '" /app/'
+            or prefix .. '["' .. body .. '","/app/"]'
+          if not fixture('markdown', { '```dockerfile', line, '```' }, 2, 0) then
+            return
+          end
+          local host = original_get_parser(bufnr)
+          host:parse(true)
+          local child = assert(host:children().dockerfile)
+          child:set_included_regions({ { { 1, 0, 1, #line } } })
+          vim.o.virtualedit = 'onemore'
+          vim.api.nvim_win_set_cursor(0, { 2, #line })
+          config.setup({ targets = { comment = true, string = false } })
+          request('insert')
+          commands.enable_immersive(bufnr)
+          assert.equals(0, #calls)
+          config.setup({ targets = { comment = true, string = true } })
+          vim.api.nvim_win_set_cursor(0, { 2, #prefix + (form == 'hash path' and 1 or 2) })
+          request('insert')
+          expect_text(body)
+          calls = {}
+          vim.api.nvim_win_set_cursor(0, { 2, #line })
+          request('insert')
+          assert.equals(0, #calls)
+
+          line = '# genuine comment'
+          vim.api.nvim_buf_set_lines(bufnr, 1, 2, false, { line })
+          host:parse(true)
+          child:set_included_regions({ { { 1, 0, 1, #line } } })
+          vim.api.nvim_win_set_cursor(0, { 2, #line })
+          request('insert')
+          expect_text('genuine comment')
+        end
+      )
+    end
+
+    it(
+      'withholds nested comments inside misparsed ' .. instruction .. ' paths on first use',
+      function()
+        if
+          not require_language('markdown')
+          or not require_language('dockerfile')
+          or not require_language('bash')
+        then
+          return
+        end
+        query(
+          'markdown',
+          '((fenced_code_block (code_fence_content) @injection.content)'
+            .. ' (#set! injection.language "dockerfile"))'
+        )
+        query('dockerfile', '((comment) @injection.content (#set! injection.language "bash"))')
+        query('bash', '')
+        local prefix, body = instruction .. ' "', 'hello # world'
+        if
+          not fixture(
+            'markdown',
+            { '```dockerfile', prefix .. body .. '" /app/', '```' },
+            2,
+            #prefix + 7
+          )
+        then
+          return
+        end
+        config.setup({ targets = { comment = true, string = false } })
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+        expect_child('dockerfile')
+        local dockerfile = original_get_parser(bufnr):children().dockerfile
+        assert.is_truthy(dockerfile:children().bash)
+        request('auto')
+        assert.equals(0, #calls)
+        config.setup({ targets = { comment = true, string = true } })
+        request('auto')
+        expect_text(body)
+      end
+    )
+  end
+
+  it('withholds Dockerfile recovery across disjoint injected regions', function()
+    if not require_language('markdown') or not require_language('dockerfile') then
+      return
+    end
+    query(
+      'markdown',
+      '((fenced_code_block (code_fence_content) @injection.content)'
+        .. ' (#set! injection.language "dockerfile"))'
+    )
+    query('dockerfile', '')
+    local first, hole, last = 'COPY "hello ', 'HOST', ' world" /app/'
+    local line = first .. hole .. last
+    if not fixture('markdown', { '```dockerfile', line, '```' }, 2, #'COPY "') then
+      return
+    end
+    local host = original_get_parser(bufnr)
+    host:parse(true)
+    host:children().dockerfile:set_included_regions({
+      { { 1, 0, 1, #first }, { 1, #first + #hole, 1, #line } },
+    })
+    config.setup({ targets = { comment = true, string = true } })
+    request('auto')
+    commands.enable_immersive(bufnr)
+    assert.equals(0, #calls)
+  end)
+
+  it('keeps malformed Dockerfile JSON out of message history', function()
+    if not require_language('dockerfile') then
+      return
+    end
+    query('dockerfile', '')
+    local message, history = vim.v.errmsg, vim.fn.execute('messages')
+    for _, form in ipairs({
+      { line = 'COPY ["synthetic-private","/app/"', col = 9 },
+      { line = 'COPY [synthetic-private] /app/', col = 5 },
+    }) do
+      if not fixture('dockerfile', { form.line }, 1, form.col) then
+        return
+      end
+      for _, targets in ipairs({
+        { comment = false, string = false },
+        { comment = true, string = true },
+      }) do
+        config.setup({ targets = targets })
+        request('auto')
+        commands.enable_immersive(bufnr)
+        assert.equals(0, #calls)
+        assert.is_true(vim.v.errmsg == message)
+        assert.is_true(vim.fn.execute('messages') == history)
+      end
+    end
+  end)
+
+  for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+    for _, escape in ipairs({ '\\', '`' }) do
+      for _, form in ipairs({ 'path', 'option', 'spanning quote' }) do
+        for _, profile in ipairs({ 'parser only', 'nested injection' }) do
+          it(
+            'withholds logical '
+              .. instruction
+              .. ' continuation comments: '
+              .. form
+              .. ', '
+              .. escape
+              .. ', '
+              .. profile,
+            function()
+              if not require_language('dockerfile') then
+                return
+              end
+              query('dockerfile', '')
+              local header = instruction
+                .. ' '
+                .. (form == 'spanning quote' and '"hello ' or '')
+                .. escape
+              local line = form == 'path' and '  "hello # world" /app/'
+                or form == 'option' and '  --exclude="private # pattern" "src" /app/'
+                or '  world # fragment" /app/'
+              local lines = { '# escape=' .. escape, header, line, '# genuine comment' }
+              local row, ft = 3, 'dockerfile'
+              if profile == 'nested injection' then
+                if not require_language('markdown') or not require_language('bash') then
+                  return
+                end
+                query(
+                  'markdown',
+                  '((fenced_code_block (code_fence_content) @injection.content)'
+                    .. ' (#set! injection.language "dockerfile"))'
+                )
+                query(
+                  'dockerfile',
+                  '((comment) @injection.content (#set! injection.language "bash"))'
+                )
+                query('bash', '')
+                table.insert(lines, 1, '```dockerfile')
+                table.insert(lines, '```')
+                row, ft = row + 1, 'markdown'
+              end
+              if not fixture(ft, lines, row, assert(line:find('#', 1, true)) + 1) then
+                return
+              end
+              config.setup({ targets = { comment = true, string = false } })
+              request('auto')
+              assert.equals(0, #calls)
+              vim.o.virtualedit = 'onemore'
+              vim.api.nvim_win_set_cursor(0, { row, #line })
+              request('insert')
+              assert.equals(0, #calls)
+              commands.enable_immersive(bufnr)
+              assert.equals(2, #calls)
+              for _, text in ipairs(calls) do
+                assert.is_true(text == 'escape=' .. escape or text == 'genuine comment')
+              end
+              calls = {}
+              config.setup({ targets = { comment = false, string = true } })
+              vim.api.nvim_win_set_cursor(0, { row, assert(line:find('#', 1, true)) + 1 })
+              request('auto')
+              assert.equals(0, #calls)
+              if profile == 'nested injection' then
+                expect_child('dockerfile')
+                assert.is_truthy(original_get_parser(bufnr):children().dockerfile:children().bash)
+              end
+            end
+          )
+        end
+      end
+    end
+
+    it('withholds parsed ' .. instruction .. ' continuation paths across root gaps', function()
+      if not require_language('dockerfile') then
+        return
+      end
+      query('dockerfile', '')
+      local header, first, hole, last = instruction .. ' \\', '  "hello ', 'HOST', ' world" /app/'
+      local line = first .. hole .. last
+      if not fixture('dockerfile', { header, line }, 2, 5) then
+        return
+      end
+      original_get_parser(bufnr):set_included_regions({
+        {
+          { 0, 0, 0, #header },
+          { 1, 0, 1, #first },
+          { 1, #first + #hole, 1, #line },
+        },
+      })
+      config.setup({ targets = { comment = true, string = true } })
+      request('auto')
+      commands.enable_immersive(bufnr)
+      assert.equals(0, #calls)
+    end)
+
+    it('does not classify inline ' .. instruction .. ' hash arguments as comments', function()
+      if not require_language('dockerfile') then
+        return
+      end
+      query('dockerfile', '')
+      if
+        not fixture(
+          'dockerfile',
+          { instruction .. ' plain#argument /app/', '# genuine comment' },
+          1,
+          16
+        )
+      then
+        return
+      end
+      config.setup({ targets = { comment = true, string = true } })
+      request('auto')
+      assert.equals(0, #calls)
+      commands.enable_immersive(bufnr)
+      expect_text('genuine comment')
+    end)
+  end
+
+  for _, escape in ipairs({ '\\', '`' }) do
+    for _, instruction in ipairs({ 'COPY', 'ADD' }) do
+      it('withholds ' .. instruction .. ' directly adjoining a continuation: ' .. escape, function()
+        if not require_language('dockerfile') then
+          return
+        end
+        query('dockerfile', '')
+        local line = '  "hello # world" /app/'
+        if
+          not fixture('dockerfile', { '# escape=' .. escape, instruction .. escape, line }, 3, 11)
+        then
+          return
+        end
+        config.setup({ targets = { comment = true, string = false } })
+        request('auto')
+        assert.equals(0, #calls)
+        vim.o.virtualedit = 'onemore'
+        vim.api.nvim_win_set_cursor(0, { 3, #line })
+        request('insert')
+        assert.equals(0, #calls)
+        commands.enable_immersive(bufnr)
+        expect_text('escape=' .. escape)
+      end)
+    end
+
+    it('does not continue COPY after an escaped escape token: ' .. escape, function()
+      if not require_language('dockerfile') then
+        return
+      end
+      query('dockerfile', '')
+      if
+        not fixture('dockerfile', {
+          '# escape=' .. escape,
+          'COPY plain /app/ ' .. escape .. escape,
+          'ADD ["hello","/app/"]',
+        }, 3, 7)
+      then
+        return
+      end
+      config.setup({ targets = { comment = false, string = true } })
+      request('auto')
+      expect_text('hello')
+    end)
+  end
+
   local quoted_forms = {
     { ft = 'sql', prefix = 'SELECT ', suffix = ';' },
     { ft = 'html', prefix = '<div title=', suffix = '></div>' },

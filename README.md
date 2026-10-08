@@ -118,7 +118,19 @@ this does not extend string detection beyond its node. Quoted-node extraction
 is restricted to the classified string node, including quoted content in
 Bash heredoc bodies, PHP nowdoc bodies, Vim assignment heredoc bodies,
 YAML block or plain string scalars, SQL literals, Dockerfile JSON instruction
-arguments, and PHP interpolated strings. Nowdoc and assignment heredoc extraction
+arguments, and PHP interpolated strings. Dockerfile COPY/ADD compatibility uses a
+parsed command token to validate its arguments on the same line, including compact
+JSON arrays and quoted paths containing # that older grammars misparse.
+Only complete single/double quoted fragments in valid path arguments are
+extracted; options, unquoted paths, and heredoc markers are excluded. Dockerfile
+escape directives are respected, and JSON forms keep JSON backslash escapes.
+Inline # in COPY/ADD arguments is data, so misparsed comments there are withheld
+from hover and immersive detection, including when string targets are disabled.
+This also applies to logical continuation rows under either escape directive;
+genuine full-line comments are preserved. Continuation rows retain parsed
+path-node extraction; recovery from grammar errors stays on the command's own line.
+Recovery cannot span gaps in the command's owning parse regions.
+Nowdoc and assignment heredoc extraction
 keeps the existing line-based quoted fragment and requires a complete enclosing
 node; it does not submit the whole body. With a PHP
 parser, hovering on an interpolation or its outer quote extracts the selected
