@@ -177,6 +177,434 @@ describe('replace selection safety', function()
   end)
 end)
 
+describe('visual block replacement', function()
+  local commands
+  local bufnr
+  local other_bufnr
+  local calls
+  local callback
+  local original_notify
+  local notifications
+  local saved_options
+  local saved_registers
+  local saved_maps
+  local saved_leader
+
+  local maps = {
+    { 'x', ',tr' },
+    { 'x', '<Plug>(comment-translate-replace)' },
+    { 'n', '<Plug>(comment-translate-hover)' },
+    { 'n', '<Plug>(comment-translate-hover-manual)' },
+    { 'n', '<Plug>(comment-translate-toggle)' },
+    { 'n', '<Plug>(comment-translate-update)' },
+  }
+
+  local function keys(input)
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(input, true, false, true), 'xt', false)
+  end
+
+  local function lines()
+    return vim.api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  end
+
+  local function select(input)
+    keys(input)
+    assert.equals('\22', vim.fn.mode())
+  end
+
+  -- Use the editor's own yank as the oracle, without printing source text.
+  local function native_source()
+    vim.cmd('silent noautocmd keepjumps normal! "zy')
+    local source = table.concat(vim.fn.getreg('z', 1, true), '\n')
+    vim.cmd('silent noautocmd keepjumps normal! gv')
+    return source
+  end
+
+  before_each(function()
+    saved_options = { selection = vim.o.selection, virtualedit = vim.o.virtualedit }
+    vim.o.selection = 'inclusive'
+    vim.o.virtualedit = ''
+    saved_registers = {}
+    for _, name in ipairs({ 'z', '0', '"' }) do
+      saved_registers[name] = vim.fn.getreginfo(name)
+    end
+    saved_leader = vim.g.mapleader
+    vim.g.mapleader = ','
+    saved_maps = {}
+    for index, map in ipairs(maps) do
+      saved_maps[index] = vim.fn.maparg(map[2], map[1], false, true)
+    end
+
+    calls = {}
+    callback = nil
+    package.loaded['comment-translate.commands'] = nil
+    package.loaded['comment-translate.config'] = nil
+    package.loaded['comment-translate.translate'] = {
+      translate = function(text, _, _, cb)
+        calls[#calls + 1] = text
+        callback = cb
+      end,
+    }
+    local config = require('comment-translate.config')
+    config.setup({ keymaps = { hover = false, hover_manual = false, toggle = false } })
+    commands = require('comment-translate.commands')
+    commands.setup()
+
+    original_notify = vim.notify
+    notifications = {}
+    vim.notify = function(message)
+      notifications[#notifications + 1] = message
+    end
+    bufnr = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(bufnr)
+    vim.bo[bufnr].tabstop = 8
+    vim.bo[bufnr].vartabstop = ''
+  end)
+
+  after_each(function()
+    keys('<Esc>')
+    vim.notify = original_notify
+    vim.o.selection = saved_options.selection
+    vim.o.virtualedit = saved_options.virtualedit
+    for _, name in ipairs({ 'z', '0', '"' }) do
+      vim.fn.setreg(name, saved_registers[name])
+    end
+    vim.g.mapleader = saved_leader
+    for index, map in ipairs(maps) do
+      pcall(vim.keymap.del, map[1], map[2])
+      if next(saved_maps[index]) then
+        vim.fn.mapset(map[1], false, saved_maps[index])
+      end
+    end
+    for _, name in ipairs({
+      'CommentTranslateHover',
+      'CommentTranslateReplace',
+      'CommentTranslateToggle',
+      'CommentTranslateUpdate',
+      'CommentTranslateHoverToggle',
+    }) do
+      pcall(vim.api.nvim_del_user_command, name)
+    end
+    for _, buf in ipairs({ bufnr, other_bufnr }) do
+      if buf and vim.api.nvim_buf_is_valid(buf) then
+        vim.api.nvim_buf_delete(buf, { force = true })
+      end
+    end
+    other_bufnr = nil
+  end)
+
+  for _, route in ipairs({ 'function', 'mapping', 'ex', 'previous selection' }) do
+    it('should preserve unselected text through ' .. route, function()
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, {
+        'aaOUTSIDE1',
+        'bbOUTSIDE2',
+        'ccOUTSIDE3',
+        'footer',
+      })
+      select('gg0<C-v>2jl')
+      local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+      if route == 'mapping' then
+        keys(',tr')
+      elseif route == 'ex' then
+        keys(':<C-u>CommentTranslateReplace<CR>')
+      elseif route == 'previous selection' then
+        keys('<Esc>4G0')
+        vim.cmd('CommentTranslateReplace')
+      else
+        commands.replace_selection()
+      end
+      assert.equals(1, #calls)
+      assert.is_true(calls[1] == 'aa\nbb\ncc')
+      assert.equals(tick, vim.api.nvim_buf_get_changedtick(bufnr))
+      callback('translated')
+      assert.is_true(vim.deep_equal(lines(), {
+        'translatedOUTSIDE1',
+        'OUTSIDE2',
+        'OUTSIDE3',
+        'footer',
+      }))
+    end)
+  end
+
+  local cases = {
+    {
+      name = 'reverse corners',
+      input = { 'xxaaOUT1', 'xxbbOUT2', 'xxccOUT3' },
+      keys = '3G03l<C-v>2kh',
+      result = 'A\nB\nC',
+      expected = { 'xxAOUT1', 'xxBOUT2', 'xxCOUT3' },
+    },
+    {
+      name = 'multibyte characters',
+      input = { 'xxあいOUT1', 'xxうえOUT2', 'xxおかOUT3' },
+      keys = 'gg02l<C-v>2jl',
+      result = 'A\nB\nC',
+      expected = { 'xxAOUT1', 'xxBOUT2', 'xxCOUT3' },
+    },
+    {
+      name = 'combining characters',
+      input = { 'xxábOUT1', 'xxćdOUT2' },
+      keys = 'gg02l<C-v>jl',
+      result = 'A\nB',
+      expected = { 'xxAOUT1', 'xxBOUT2' },
+    },
+    {
+      name = 'partial tabs',
+      input = { 'abcOUT1', '\tOUT2', 'defOUT3' },
+      keys = 'gg0l<C-v>2jl',
+      result = 'X\nY\nZ',
+      expected = { 'aXOUT1', ' Y     OUT2', 'dZOUT3' },
+    },
+    {
+      name = 'partial wide characters',
+      input = { 'abcOUT1', 'あいOUT2', 'defOUT3' },
+      keys = 'gg0l<C-v>2j',
+      result = 'X\nY\nZ',
+      expected = { 'aXcOUT1', ' YいOUT2', 'dZfOUT3' },
+    },
+    {
+      name = 'short and empty lines',
+      input = { 'xxaaOUT1', 'x', '', 'xxddOUT4' },
+      keys = 'gg02l<C-v>3jl',
+      result = 'A\nB\nC\nD',
+      expected = { 'xxAOUT1', 'x B', '  C', 'xxDOUT4' },
+    },
+    {
+      name = 'exclusive selection',
+      input = { 'aaOUT1', 'bbOUT2', 'ccOUT3' },
+      keys = 'gg0<C-v>2j2l',
+      selection = 'exclusive',
+      result = 'A\nB\nC',
+      expected = { 'AOUT1', 'BOUT2', 'COUT3' },
+    },
+    {
+      name = 'virtual editing',
+      input = { 'xxaaOUT1', 'x', 'xxccOUT3' },
+      keys = 'gg02l<C-v>2jl',
+      virtualedit = 'block',
+      result = 'A\nB\nC',
+      expected = { 'xxAOUT1', 'x B', 'xxCOUT3' },
+    },
+    {
+      name = 'virtual endpoints inside tabs',
+      input = { '\tabcOUT1', '\tdefOUT2' },
+      keys = 'gg02l<C-v>j2l',
+      virtualedit = 'all',
+      result = 'A\nB',
+      expected = { '  A   abcOUT1', '  B   defOUT2' },
+    },
+    {
+      name = 'variable tab stops',
+      input = { 'abcOUT1', '\tOUT2', 'defOUT3' },
+      keys = 'gg0l<C-v>2jl',
+      vartabstop = '4,6',
+      result = 'X\nY\nZ',
+      expected = { 'aXOUT1', ' Y OUT2', 'dZOUT3' },
+    },
+    {
+      name = 'reverse exclusive corners',
+      input = { 'xxaaOUT1', 'xxbbOUT2', 'xxccOUT3' },
+      keys = '3G04l<C-v>2k2h',
+      selection = 'exclusive',
+      result = 'A\nB\nC',
+      expected = { 'xxAOUT1', 'xxBOUT2', 'xxCOUT3' },
+    },
+    {
+      name = 'each line to its end',
+      input = { 'xxaaa', 'xxbbbbbbbb', 'xxcc', 'footer' },
+      keys = 'gg02l<C-v>2j$',
+      result = 'A\nB\nC',
+      expected = { 'xxA', 'xxB', 'xxC', 'footer' },
+    },
+    {
+      name = 'one line',
+      input = { 'xxaaOUT1', 'footer' },
+      keys = 'gg02l<C-v>l',
+      result = 'A',
+      expected = { 'xxAOUT1', 'footer' },
+    },
+    {
+      name = 'additional result lines',
+      input = { 'xxaaOUT1', 'xxbbOUT2', 'footer' },
+      keys = 'gg02l<C-v>jl',
+      result = 'A\nB\nC\nD',
+      expected = { 'xxAOUT1', 'xxBOUT2', '  C', '  D', 'footer' },
+    },
+    {
+      name = 'empty result',
+      input = { 'xxaaOUT1', 'xxbbOUT2', 'footer' },
+      keys = 'gg02l<C-v>jl',
+      result = '',
+      expected = { 'xxOUT1', 'xxOUT2', 'footer' },
+    },
+  }
+
+  for _, case in ipairs(cases) do
+    it('should handle ' .. case.name, function()
+      vim.o.selection = case.selection or 'inclusive'
+      vim.o.virtualedit = case.virtualedit or ''
+      vim.bo[bufnr].vartabstop = case.vartabstop or ''
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, case.input)
+      select(case.keys)
+      local expected_source = native_source()
+      commands.replace_selection()
+      assert.equals(1, #calls)
+      assert.is_true(calls[1] == expected_source)
+      callback(case.result)
+      assert.is_true(vim.deep_equal(lines(), case.expected))
+      keys('u')
+      assert.is_true(vim.deep_equal(lines(), case.input))
+    end)
+
+    it('should match native block removal for ' .. case.name, function()
+      vim.o.selection = case.selection or 'inclusive'
+      vim.o.virtualedit = case.virtualedit or ''
+      vim.bo[bufnr].vartabstop = case.vartabstop or ''
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, case.input)
+      select(case.keys)
+      vim.cmd('silent noautocmd keepjumps normal! "_d')
+      local expected = lines()
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, case.input)
+      select(case.keys)
+      commands.replace_selection()
+      callback('')
+      assert.is_true(vim.deep_equal(lines(), expected))
+    end)
+  end
+
+  for _, mode in ipairs({ 'v', 'V' }) do
+    it('should keep a new ' .. mode .. ' selection after a block selection', function()
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'aaOUT1', 'bbOUT2', 'footer' })
+      select('gg0<C-v>jl')
+      keys('<Esc>gg0' .. mode .. (mode == 'v' and 'l' or 'j'))
+      assert.equals(mode, vim.fn.mode())
+      commands.replace_selection()
+      assert.equals(1, #calls)
+      assert.is_true(calls[1] == (mode == 'v' and 'aa' or 'aaOUT1\nbbOUT2'))
+      callback('A')
+      assert.is_true(
+        vim.deep_equal(
+          lines(),
+          mode == 'v' and { 'AOUT1', 'bbOUT2', 'footer' } or { 'A', 'footer' }
+        )
+      )
+    end)
+  end
+
+  it('should restore registers, yank marks and the view without firing TextYankPost', function()
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'aaOUT1', 'bbOUT2', 'footer' })
+    select('gg0<C-v>jl')
+    keys('<Esc>3G0')
+    local registers = {}
+    for _, name in ipairs({ 'z', '0', '"' }) do
+      registers[name] = vim.fn.getreginfo(name)
+    end
+    local start_mark, end_mark = vim.fn.getpos("'["), vim.fn.getpos("']")
+    local view = vim.fn.winsaveview()
+    local events = 0
+    local autocmd = vim.api.nvim_create_autocmd('TextYankPost', {
+      callback = function()
+        events = events + 1
+      end,
+    })
+    commands.replace_selection()
+    vim.api.nvim_del_autocmd(autocmd)
+    assert.equals(0, events)
+    assert.is_true(vim.deep_equal(view, vim.fn.winsaveview()))
+    assert.is_true(vim.deep_equal(start_mark, vim.fn.getpos("'[")))
+    assert.is_true(vim.deep_equal(end_mark, vim.fn.getpos("']")))
+    for _, name in ipairs({ 'z', '0', '"' }) do
+      assert.is_true(vim.deep_equal(registers[name], vim.fn.getreginfo(name)))
+    end
+  end)
+
+  it('should preserve extmarks outside the rectangle', function()
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'xxaaOUT1', 'xxbbOUT2' })
+    local ns = vim.api.nvim_create_namespace('comment-translate-block-test')
+    local left = vim.api.nvim_buf_set_extmark(bufnr, ns, 1, 0, {})
+    local right = vim.api.nvim_buf_set_extmark(bufnr, ns, 1, 5, {})
+    select('gg02l<C-v>jl')
+    commands.replace_selection()
+    callback('A\nB')
+    assert.same({ 1, 0 }, vim.api.nvim_buf_get_extmark_by_id(bufnr, ns, left, {}))
+    assert.same({ 1, 4 }, vim.api.nvim_buf_get_extmark_by_id(bufnr, ns, right, {}))
+  end)
+
+  for _, failure in ipairs({
+    'changed buffer',
+    'unmodifiable buffer',
+    'translation failure',
+    'deleted buffer',
+  }) do
+    it('should avoid partial replacement for a ' .. failure, function()
+      local original = { 'aaOUT1', 'bbOUT2' }
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, original)
+      select('gg0<C-v>jl')
+      commands.replace_selection()
+      if failure == 'changed buffer' then
+        original = { 'user edit', 'bbOUT2' }
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, original)
+      elseif failure == 'unmodifiable buffer' then
+        vim.bo[bufnr].modifiable = false
+      elseif failure == 'deleted buffer' then
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+      end
+      assert.has_no.errors(function()
+        if failure == 'translation failure' then
+          callback(nil)
+        else
+          callback('A\nB')
+        end
+      end)
+      if failure ~= 'deleted buffer' then
+        assert.is_true(vim.deep_equal(lines(), original))
+      end
+    end)
+  end
+
+  it('should use the captured rectangle after the buffer and selection change', function()
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'aaOUT1', 'bbOUT2' })
+    select('gg0<C-v>jl')
+    commands.replace_selection()
+    other_bufnr = vim.api.nvim_create_buf(false, true)
+    vim.api.nvim_set_current_buf(other_bufnr)
+    vim.api.nvim_buf_set_lines(other_bufnr, 0, -1, false, { 'other buffer' })
+    keys('gg0vl')
+    local cursor, anchor = vim.fn.getpos('.'), vim.fn.getpos('v')
+    callback('A\nB')
+    assert.is_true(vim.deep_equal(lines(), { 'AOUT1', 'BOUT2' }))
+    assert.equals(other_bufnr, vim.api.nvim_get_current_buf())
+    assert.equals('v', vim.fn.mode())
+    assert.is_true(vim.deep_equal(cursor, vim.fn.getpos('.')))
+    assert.is_true(vim.deep_equal(anchor, vim.fn.getpos('v')))
+    assert.is_true(
+      vim.deep_equal(vim.api.nvim_buf_get_lines(other_bufnr, 0, -1, false), { 'other buffer' })
+    )
+  end)
+
+  it('should restore state without a request when capture fails', function()
+    local original = { 'aaOUT1', 'bbOUT2' }
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, original)
+    select('gg0<C-v>jl')
+    local registers = {}
+    for _, name in ipairs({ 'z', '0', '"' }) do
+      registers[name] = vim.fn.getreginfo(name)
+    end
+    local original_virtcol2col = vim.fn.virtcol2col
+    vim.fn.virtcol2col = function()
+      error('fixture capture failure')
+    end
+    local ok = pcall(commands.replace_selection)
+    vim.fn.virtcol2col = original_virtcol2col
+    assert.is_true(ok)
+    assert.equals(0, #calls)
+    assert.is_true(vim.deep_equal(lines(), original))
+    for _, name in ipairs({ 'z', '0', '"' }) do
+      assert.is_true(vim.deep_equal(registers[name], vim.fn.getreginfo(name)))
+    end
+  end)
+end)
+
 describe('immersive async lifecycle', function()
   local commands
   local bufnr
@@ -556,7 +984,12 @@ describe('immersive multi-buffer behavior', function()
     package.loaded['comment-translate.parser'] = nil
     package.loaded['comment-translate.parser.regex'] = nil
     package.loaded['comment-translate.parser.treesitter'] = nil
-    package.loaded['comment-translate.translate'] = nil
+    -- These cases exercise state changes, never real translation requests.
+    package.loaded['comment-translate.translate'] = {
+      translate = function(_, _, _, callback)
+        callback(nil)
+      end,
+    }
     package.loaded['comment-translate.translate.cache'] = nil
     package.loaded['comment-translate.translate.google'] = nil
     package.loaded['comment-translate.translate.llm'] = nil
