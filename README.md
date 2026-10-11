@@ -102,6 +102,15 @@ vim.keymap.set('n', '<leader>th', '<cmd>CommentTranslateHover<CR>', { silent = t
 :CommentTranslateReplace
 ```
 
+Characterwise (`v`), linewise (`V`), and Visual Block (`Ctrl-V`) selections are
+supported. A block sends only the selected rectangle in one translation request.
+Result lines replace the selected portions from top to bottom, preserving the
+text on either side. If the result has fewer lines, the remaining selected
+portions are removed; additional lines are inserted after the selected rows,
+indented to the block's left edge. Tabs and wide characters that cross a block
+boundary use Neovim's native block semantics: the unselected cells are retained
+as spaces. All block changes can be undone together with one `u`.
+
 ### Translation Targets and Parsing
 
 Hover detection uses `targets.comment` and `targets.string`. Immersive mode

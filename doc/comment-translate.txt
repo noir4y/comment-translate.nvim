@@ -208,7 +208,8 @@ COMMANDS                                        *comment-translate-commands*
     Toggle automatic hover translation on CursorHold.
 
 *:CommentTranslateReplace*
-    Translate selected text and replace it.
+    Translate a characterwise, linewise, or Visual Block selection and replace it.
+    See Selection Replacement under |comment-translate-usage| for block behavior.
 
 *:CommentTranslateHealth*
     Check plugin health and parser availability for the buffer that
@@ -256,6 +257,15 @@ to all buffers you switch to. Toggling OFF disables it for all buffers.
 Selection Replacement~
 Select text in visual mode, then run `:CommentTranslateReplace` or
 press <leader>tr to replace with translation.
+
+Characterwise (v), linewise (V), and Visual Block (Ctrl-V) selections are
+supported. A block sends only the selected rectangle in one translation request.
+Result lines replace the selected portions from top to bottom, preserving the
+text on either side. If the result has fewer lines, the remaining selected
+portions are removed. Additional lines are inserted after the selected rows,
+indented to the block's left edge; subsequent existing rows are preserved.
+Tabs and wide characters crossing a block boundary follow Neovim's native block
+semantics: unselected cells are retained as spaces. One u undoes all block changes.
 
 PARSING AND TARGETS                              *comment-translate-parsing*
 

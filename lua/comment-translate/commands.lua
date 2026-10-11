@@ -144,20 +144,34 @@ local function get_visual_selection_range()
 end
 
 function M.replace_selection()
-  local bufnr, start_line, start_col, end_line, end_col_excl, success = get_visual_selection_range()
-
-  if not success then
-    vim.notify('No text selected', vim.log.levels.WARN)
-    return
+  local mode = vim.fn.mode()
+  local visual_mode = mode:match('[vV\22]') and mode or vim.fn.visualmode()
+  local bufnr, start_line, start_col, end_line, end_col_excl
+  local block, block_selection, text
+  if visual_mode == '\22' then
+    bufnr = vim.api.nvim_get_current_buf()
+    block = require('comment-translate.selection.block')
+    block_selection = block.capture()
+    if not block_selection then
+      vim.notify('No text selected', vim.log.levels.WARN)
+      return
+    end
+    text = block_selection.text
+  else
+    local success
+    bufnr, start_line, start_col, end_line, end_col_excl, success = get_visual_selection_range()
+    if not success then
+      vim.notify('No text selected', vim.log.levels.WARN)
+      return
+    end
+    local lines =
+      vim.api.nvim_buf_get_text(bufnr, start_line, start_col, end_line, end_col_excl, {})
+    if #lines == 0 then
+      vim.notify('No text selected', vim.log.levels.WARN)
+      return
+    end
+    text = table.concat(lines, '\n')
   end
-
-  local lines = vim.api.nvim_buf_get_text(bufnr, start_line, start_col, end_line, end_col_excl, {})
-  if #lines == 0 then
-    vim.notify('No text selected', vim.log.levels.WARN)
-    return
-  end
-
-  local text = table.concat(lines, '\n')
 
   if not text or text == '' then
     vim.notify('Selected text is empty', vim.log.levels.WARN)
@@ -187,7 +201,11 @@ function M.replace_selection()
     end
 
     local result_lines = vim.split(result, '\n', { plain = true })
-    vim.api.nvim_buf_set_text(bufnr, start_line, start_col, end_line, end_col_excl, result_lines)
+    if block_selection then
+      block.replace(bufnr, block_selection, result_lines)
+    else
+      vim.api.nvim_buf_set_text(bufnr, start_line, start_col, end_line, end_col_excl, result_lines)
+    end
 
     vim.notify('Replaced with translation', vim.log.levels.INFO)
   end)
