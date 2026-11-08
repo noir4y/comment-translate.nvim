@@ -31,7 +31,10 @@ function M.translate(text, target_lang, source_lang, callback)
     error('callback is required')
   end
 
-  local cached = cache.get(text, target_lang, source_lang)
+  target_lang = utils.normalize_lang_code(target_lang)
+  source_lang = utils.normalize_lang_code(source_lang or 'auto')
+  local namespace = cache.namespace({ 'google' })
+  local cached = cache.get(text, target_lang, source_lang, namespace)
   if cached then
     vim.schedule(function()
       callback(cached)
@@ -73,10 +76,6 @@ function M.translate(text, target_lang, source_lang, callback)
     end)
     return
   end
-
-  source_lang = source_lang or 'auto'
-  target_lang = utils.normalize_lang_code(target_lang)
-  source_lang = utils.normalize_lang_code(source_lang)
 
   local url = string.format(
     'https://translate.googleapis.com/translate_a/single?client=gtx&sl=%s&tl=%s&dt=t',
@@ -133,7 +132,7 @@ function M.translate(text, target_lang, source_lang, callback)
           return
         end
 
-        cache.set(text, translated_text, target_lang, source_lang)
+        cache.set(text, translated_text, target_lang, source_lang, namespace)
         callback(translated_text)
       end)
     end,

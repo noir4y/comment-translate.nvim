@@ -32,7 +32,10 @@ This plugin gives you control over where your text goes:
 - `translate_service = 'google'` or hosted `llm` providers: text is sent to the configured remote service.
 - `llm.provider = 'ollama'` with the default local endpoint keeps translation local; if `llm.endpoint` is set to a remote host, text is sent there.
 - API keys and source text/request bodies are passed to `curl` through stdin config, not through process arguments.
-- Cache is in-memory only and is not persisted to disk by this plugin.
+- Cache is in-memory only and is not persisted to disk by this plugin. Results are
+  separated by translation service and effective LLM provider, model, endpoint, and
+  system prompt. Changing these settings can cause a new request on the next
+  translation; returning to matching settings can reuse a cached result.
 
 For sensitive repositories, local Ollama models are the recommended setup.
 

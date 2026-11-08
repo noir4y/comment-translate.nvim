@@ -14,12 +14,20 @@ local lru_keys = {}
 ---@param text string
 ---@param target_lang string
 ---@param source_lang? string
+---@param namespace? string
 ---@return string
-local function make_key(text, target_lang, source_lang)
+local function make_key(text, target_lang, source_lang, namespace)
   source_lang = source_lang or 'auto'
   -- Hash the text to avoid collisions from delimiter characters in the original text
   local text_hash = vim.fn.sha256(text)
-  return string.format('%s|%s|%s', text_hash, source_lang, target_lang)
+  return string.format('%s|%s|%s|%s', namespace or '', text_hash, source_lang, target_lang)
+end
+
+---Hash a fixed-order list of effective backend settings; never include credentials.
+---@param settings string[]
+---@return string
+function M.namespace(settings)
+  return vim.fn.sha256(vim.fn.json_encode(settings))
 end
 
 ---@param key string
@@ -53,13 +61,14 @@ end
 ---@param translated_text string
 ---@param target_lang string
 ---@param source_lang? string
-function M.set(text, translated_text, target_lang, source_lang)
+---@param namespace? string
+function M.set(text, translated_text, target_lang, source_lang, namespace)
   local config = require('comment-translate.config')
   if not config.config.cache.enabled then
     return
   end
 
-  local key = make_key(text, target_lang, source_lang)
+  local key = make_key(text, target_lang, source_lang, namespace)
 
   if cache[key] then
     cache[key] = translated_text
@@ -83,14 +92,15 @@ end
 ---@param text string
 ---@param target_lang string
 ---@param source_lang? string
+---@param namespace? string
 ---@return string?
-function M.get(text, target_lang, source_lang)
+function M.get(text, target_lang, source_lang, namespace)
   local config = require('comment-translate.config')
   if not config.config.cache.enabled then
     return nil
   end
 
-  local key = make_key(text, target_lang, source_lang)
+  local key = make_key(text, target_lang, source_lang, namespace)
   local value = cache[key]
 
   if value then
