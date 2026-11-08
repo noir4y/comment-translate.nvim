@@ -97,6 +97,7 @@ describe('replace selection safety', function()
   local notify_messages
   local translate_calls
   local pending_callback
+  local saved_selection
 
   local function reset_modules(fake_translate)
     package.loaded['comment-translate.commands'] = nil
@@ -108,12 +109,13 @@ describe('replace selection safety', function()
     package.loaded['comment-translate.ui.virtual_text'] = nil
   end
 
-  local function set_selection(line, start_col, end_col)
-    vim.api.nvim_buf_set_mark(bufnr, '<', line, start_col, {})
-    vim.api.nvim_buf_set_mark(bufnr, '>', line, end_col, {})
+  local function keys(input)
+    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes(input, true, false, true), 'xt', false)
   end
 
   before_each(function()
+    saved_selection = vim.o.selection
+    vim.o.selection = 'inclusive'
     translate_calls = {}
     pending_callback = nil
     local fake_translate = {
@@ -144,6 +146,8 @@ describe('replace selection safety', function()
   end)
 
   after_each(function()
+    keys('<Esc>')
+    vim.o.selection = saved_selection
     vim.notify = original_notify
     if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
       vim.api.nvim_buf_delete(bufnr, { force = true })
@@ -154,18 +158,21 @@ describe('replace selection safety', function()
     local prefix = 'before '
     local selected = 'こんにちは'
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { prefix .. selected .. ' after' })
-    set_selection(1, #prefix, #prefix + #selected - 1)
+    keys('gg07lv4l')
+    assert.equals('v', vim.fn.mode())
 
     commands.replace_selection()
     pending_callback('hello')
 
-    assert.equals(selected, translate_calls[1].text)
-    assert.same({ 'before hello after' }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    assert.is_true(selected == translate_calls[1].text)
+    assert.is_true(
+      vim.deep_equal({ 'before hello after' }, vim.api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    )
   end)
 
   it('should not replace when the buffer changed before translation returns', function()
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'alpha beta' })
-    set_selection(1, 0, 4)
+    keys('gg0v4l')
 
     commands.replace_selection()
     vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'user changed beta' })
@@ -177,7 +184,7 @@ describe('replace selection safety', function()
   end)
 end)
 
-describe('visual block replacement', function()
+describe('visual selection replacement', function()
   local commands
   local bufnr
   local other_bufnr
@@ -292,6 +299,149 @@ describe('visual block replacement', function()
     end
     other_bufnr = nil
   end)
+
+  local characterwise_cases = {
+    {
+      name = 'Japanese at the end of a line',
+      input = { 'こんにちは', '', '世界' },
+      keys = 'gg0v4l',
+      expected = { 'T', '', '世界' },
+    },
+    {
+      name = 'Japanese between unselected text',
+      input = { 'before こんにちは after' },
+      keys = 'gg07lv4l',
+      expected = { 'before T after' },
+    },
+    {
+      name = 'reverse Japanese selection',
+      input = { 'こんにちは after' },
+      keys = 'gg04lv4h',
+      expected = { 'T after' },
+    },
+    {
+      name = 'a four-byte character',
+      input = { 'x😊after' },
+      keys = 'gg0lv',
+      expected = { 'xTafter' },
+    },
+    {
+      name = 'a combining character',
+      input = { 'xáafter' },
+      keys = 'gg0lv',
+      expected = { 'xTafter' },
+    },
+    {
+      name = 'old selection semantics',
+      input = { 'こんにちは after' },
+      keys = 'gg0v4l',
+      selection = 'old',
+      expected = { 'T after' },
+    },
+    {
+      name = 'exclusive ASCII selection',
+      input = { 'hello after' },
+      keys = 'gg0v5l',
+      selection = 'exclusive',
+      expected = { 'T after' },
+    },
+    {
+      name = 'exclusive Japanese selection',
+      input = { 'こんにちは after' },
+      keys = 'gg0v4l',
+      selection = 'exclusive',
+      expected = { 'Tは after' },
+    },
+    {
+      name = 'reverse exclusive Japanese selection',
+      input = { 'こんにちは after' },
+      keys = 'gg04lv4h',
+      selection = 'exclusive',
+      expected = { 'Tは after' },
+    },
+    {
+      name = 'exclusive selection at the same position',
+      input = { 'こんにちは after' },
+      keys = 'gg0v',
+      selection = 'exclusive',
+      expected = { 'Tんにちは after' },
+    },
+    {
+      name = 'exclusive single four-byte character',
+      input = { '😊after' },
+      keys = 'gg0v',
+      selection = 'exclusive',
+      expected = { 'Tafter' },
+    },
+    {
+      name = 'multiline Japanese selection',
+      input = { 'xxあい', 'うえzz', 'footer' },
+      keys = 'gg02lvj0l',
+      expected = { 'xxTzz', 'footer' },
+    },
+    {
+      name = 'exclusive multiline Japanese selection',
+      input = { 'xxあい', 'うえzz', 'footer' },
+      keys = 'gg02lvj0l',
+      selection = 'exclusive',
+      expected = { 'xxTえzz', 'footer' },
+    },
+    {
+      name = 'exclusive selection ending at the next line start',
+      input = { 'alpha', 'beta' },
+      keys = 'gg02lvj0',
+      selection = 'exclusive',
+      expected = { 'alTbeta' },
+    },
+    {
+      name = 'the existing end-of-line clamp',
+      input = { 'こんにちは', 'tail' },
+      keys = 'gg0v$',
+      source = 'こんにちは',
+      expected = { 'T', 'tail' },
+    },
+  }
+
+  for _, case in ipairs(characterwise_cases) do
+    it('should preserve character boundaries for ' .. case.name, function()
+      vim.o.selection = case.selection or 'inclusive'
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, case.input)
+      keys(case.keys)
+      assert.equals('v', vim.fn.mode())
+      local expected_source = case.source or native_source()
+      commands.replace_selection()
+      assert.equals(1, #calls)
+      assert.is_true(calls[1] == expected_source)
+      callback('T')
+      assert.is_true(vim.deep_equal(lines(), case.expected))
+    end)
+  end
+
+  for _, selection in ipairs({ 'inclusive', 'exclusive' }) do
+    for _, route in ipairs({ 'function', 'mapping', 'ex', 'previous selection' }) do
+      it('should replace ' .. selection .. ' Japanese text through ' .. route, function()
+        vim.o.selection = selection
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'before こんにちは after' })
+        keys('gg07lv' .. (selection == 'exclusive' and '5l' or '4l'))
+        assert.equals('v', vim.fn.mode())
+        local expected_source = native_source()
+        if route == 'mapping' then
+          keys(',tr')
+        elseif route == 'ex' then
+          keys(':<C-u>CommentTranslateReplace<CR>')
+        elseif route == 'previous selection' then
+          keys('<Esc>')
+          vim.cmd('CommentTranslateReplace')
+        else
+          commands.replace_selection()
+        end
+        assert.equals(1, #calls)
+        assert.is_true(calls[1] == expected_source)
+        callback('T')
+        assert.is_true(vim.deep_equal(lines(), { 'before T after' }))
+      end)
+    end
+  end
 
   for _, route in ipairs({ 'function', 'mapping', 'ex', 'previous selection' }) do
     it('should preserve unselected text through ' .. route, function()

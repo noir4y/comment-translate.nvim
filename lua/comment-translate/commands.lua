@@ -134,10 +134,13 @@ local function get_visual_selection_range()
   end
 
   local end_line_content = vim.api.nvim_buf_get_lines(bufnr, end_line, end_line + 1, false)[1] or ''
-  local end_col_excl = math.min(end_col + 1, #end_line_content)
-
-  if end_col >= #end_line_content then
-    end_col_excl = #end_line_content
+  local end_col_excl = math.min(end_col, #end_line_content)
+  local same_position = start_line == end_line and start_col == end_col
+  if end_col < #end_line_content and (vim.o.selection ~= 'exclusive' or same_position) then
+    -- Visual marks point to the first byte; include the whole final character,
+    -- including composing characters. Even exclusive selections include one
+    -- character when both endpoints are the same.
+    end_col_excl = end_col + vim.fn.byteidx(end_line_content:sub(end_col + 1), 1)
   end
 
   return bufnr, start_line, start_col, end_line, end_col_excl, true
