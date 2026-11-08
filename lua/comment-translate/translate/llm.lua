@@ -267,7 +267,17 @@ function M.translate(text, target_lang, source_lang, callback)
     error('callback is required')
   end
 
-  local cached = cache.get(text, target_lang, source_lang)
+  local config = require('comment-translate.config')
+  local llm_config = config.config.llm
+  local provider = llm_config.provider or 'openai'
+  local model = llm_config.model
+  local endpoint = resolve_endpoint(provider, llm_config)
+  local system_prompt = llm_config.system_prompt
+    or 'You are a translation engine. Return only the translated text. Do not add explanations.'
+  local normalized_target_lang = utils.normalize_lang_code(target_lang)
+  local normalized_source_lang = source_lang and utils.normalize_lang_code(source_lang) or 'auto'
+  local namespace = cache.namespace({ 'llm', provider, model, endpoint, system_prompt })
+  local cached = cache.get(text, normalized_target_lang, normalized_source_lang, namespace)
   if cached then
     vim.schedule(function()
       callback(cached)
@@ -282,7 +292,6 @@ function M.translate(text, target_lang, source_lang, callback)
     return
   end
 
-  local config = require('comment-translate.config')
   if #text > config.config.max_length then
     vim.schedule(function()
       callback(nil)
@@ -290,7 +299,6 @@ function M.translate(text, target_lang, source_lang, callback)
     return
   end
 
-  local provider = config.config.llm.provider or 'openai'
   if not SUPPORTED_PROVIDERS[provider] then
     vim.schedule(function()
       vim.notify(
@@ -302,7 +310,7 @@ function M.translate(text, target_lang, source_lang, callback)
     return
   end
 
-  local api_key = resolve_api_key(provider, config.config.llm)
+  local api_key = resolve_api_key(provider, llm_config)
   if provider ~= 'ollama' and not api_key then
     vim.schedule(function()
       vim.notify(
@@ -334,17 +342,12 @@ function M.translate(text, target_lang, source_lang, callback)
     return
   end
 
-  local normalized_target_lang = utils.normalize_lang_code(target_lang)
-  local normalized_source_lang = source_lang and utils.normalize_lang_code(source_lang) or 'auto'
-  local system_prompt = config.config.llm.system_prompt
-    or 'You are a translation engine. Return only the translated text. Do not add explanations.'
   local user_prompt = string.format(
     'Translate the following text from %s to %s. Return only translated text.\n\n%s',
     normalized_source_lang,
     normalized_target_lang,
     text
   )
-  local endpoint = resolve_endpoint(provider, config.config.llm)
   if not is_http_endpoint(endpoint) then
     vim.schedule(function()
       vim.notify(
@@ -356,7 +359,7 @@ function M.translate(text, target_lang, source_lang, callback)
     return
   end
 
-  local payload = build_payload(provider, config.config.llm.model, system_prompt, user_prompt)
+  local payload = build_payload(provider, model, system_prompt, user_prompt)
   local headers = build_headers(provider, api_key)
 
   local request_body = vim.fn.json_encode(payload)
@@ -408,7 +411,7 @@ function M.translate(text, target_lang, source_lang, callback)
           return
         end
 
-        cache.set(text, translated_text, normalized_target_lang, normalized_source_lang)
+        cache.set(text, translated_text, normalized_target_lang, normalized_source_lang, namespace)
         callback(translated_text)
       end)
     end,

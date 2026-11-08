@@ -20,6 +20,16 @@ describe('cache', function()
     cache.clear()
   end)
 
+  it('shares LRU capacity across isolated namespaces', function()
+    for i = 1, 6 do
+      cache.set('same input', 'result', 'ja', nil, cache.namespace({ 'llm', tostring(i) }))
+    end
+    assert.equals(5, cache.size())
+    assert.is_nil(cache.get('same input', 'ja', nil, cache.namespace({ 'llm', '1' })))
+    assert.equals('result', cache.get('same input', 'ja', nil, cache.namespace({ 'llm', '6' })))
+    assert.is_not.equals(cache.namespace({ 'a|b', 'c' }), cache.namespace({ 'a', 'b|c' }))
+  end)
+
   describe('set and get', function()
     it('should store and retrieve translations', function()
       cache.set('hello', 'こんにちは', 'ja')

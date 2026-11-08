@@ -40,7 +40,10 @@ visual selections) to the configured translation service.
 - Process arguments: API keys and source text/request bodies are passed to curl
   through stdin config, not through process argv.
 - Cache behavior: The built-in translation cache is in-memory only (no files
-  are written by the plugin). The cache is cleared when Neovim exits.
+  are written by the plugin). The cache is cleared when Neovim exits. Results
+  are separated by service and effective LLM provider, model, endpoint, and
+  system prompt. Changing these settings can cause a new request on the next
+  translation; returning to matching settings can reuse a cached result.
 - Recommendation: Use a local Ollama model for sensitive repositories, and
   avoid translating sensitive buffers/text with hosted services.
 
