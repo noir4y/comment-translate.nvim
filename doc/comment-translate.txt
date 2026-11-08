@@ -197,6 +197,8 @@ COMMANDS                                        *comment-translate-commands*
 
 *:CommentTranslateHover*
     Translate comment/string at cursor and show in hover popup.
+    Popups follow the displayed cursor position, including after scrolling,
+    and may overlap neighboring splits when space is limited.
 
 *:CommentTranslateToggle*
     Toggle immersive translation mode ON/OFF (global, affects all buffers).

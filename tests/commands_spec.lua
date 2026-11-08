@@ -836,6 +836,101 @@ describe('ui.hover', function()
       assert.equals('Hello World', lines[1])
     end)
 
+    it('should keep the same cursor-relative placement after scrolling', function()
+      local lines = {}
+      for i = 1, 1000 do
+        lines[i] = string.rep('a', 200)
+      end
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+      local placements = {}
+      for _, row in ipairs({ 10, 500 }) do
+        hover.close()
+        vim.api.nvim_win_set_cursor(0, { row, 4 })
+        vim.fn.winrestview({ topline = row - 9 })
+        vim.cmd('redraw!')
+        hover.show('probe')
+        vim.cmd('redraw!')
+        local cursor = vim.fn.screenpos(0, row, 5)
+        local pos = vim.api.nvim_win_get_position(hover.winid())
+        placements[#placements + 1] = { pos[1] - cursor.row, pos[2] - cursor.col }
+      end
+      assert.same(placements[1], placements[2])
+    end)
+
+    it('should follow displayed columns with tabs, wide text, and horizontal scrolling', function()
+      local saved = vim.wo.wrap
+      vim.wo.wrap = false
+      for _, case in ipairs({
+        { '\t' .. string.rep('a', 200), 1, 0 },
+        { '日本' .. string.rep('a', 200), 6, 0 },
+        { string.rep('a', 200), 100, 90 },
+      }) do
+        hover.close()
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { case[1] })
+        vim.api.nvim_win_set_cursor(0, { 1, case[2] })
+        vim.fn.winrestview({ leftcol = case[3] })
+        vim.cmd('redraw!')
+        local cursor = vim.fn.screenpos(0, 1, case[2] + 1)
+        hover.show('probe')
+        vim.cmd('redraw!')
+        local pos = vim.api.nvim_win_get_position(hover.winid())
+        assert.equals(cursor.col - 1 + 2, pos[2])
+      end
+      vim.wo.wrap = saved
+    end)
+
+    it('should anchor around displayed text with wrapping, gutters, and screen edges', function()
+      local saved = { wrap = vim.wo.wrap, number = vim.wo.number, foldmethod = vim.wo.foldmethod }
+      local source = vim.api.nvim_get_current_win()
+      vim.wo.wrap = true
+      vim.wo.number = true
+      vim.wo.foldmethod = 'manual'
+      local lines = {}
+      for i = 1, 100 do
+        lines[i] = string.rep('a', 200)
+      end
+      vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+      for _, command in ipairs({
+        'normal! gg0',
+        'normal! gg100l',
+        'normal! G$',
+        'topleft 5split',
+        'vsplit',
+      }) do
+        hover.close()
+        vim.cmd(command)
+        vim.cmd('redraw!')
+        hover.show('probe')
+        local cfg = vim.api.nvim_win_get_config(hover.winid())
+        local pos = vim.api.nvim_win_get_position(hover.winid())
+        assert.is_true(cfg.width > 0 and cfg.height > 0)
+        assert.is_true(pos[1] >= 0 and pos[2] >= 0)
+      end
+      hover.close()
+      for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+        if win ~= source then
+          vim.api.nvim_win_close(win, true)
+        end
+      end
+      vim.api.nvim_set_current_win(source)
+      for key, value in pairs(saved) do
+        vim.wo[key] = value
+      end
+    end)
+
+    it('should open with positive dimensions in a one-line split', function()
+      local source = vim.api.nvim_get_current_win()
+      vim.cmd('topleft 1split')
+      local split = vim.api.nvim_get_current_win()
+      local ok, err = pcall(hover.show, 'probe')
+      local height = ok and vim.api.nvim_win_get_height(hover.winid())
+      hover.close()
+      vim.api.nvim_win_close(split, true)
+      vim.api.nvim_set_current_win(source)
+      assert.is_true(ok, tostring(err))
+      assert.is_true(height >= 1)
+    end)
+
     it('should handle empty text gracefully', function()
       assert.has_no.errors(function()
         hover.show('')

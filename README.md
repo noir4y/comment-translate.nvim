@@ -86,6 +86,9 @@ If you already manage parsers through `nvim-treesitter`, you can keep doing so.
 
 ### Hover Translation
 
+Hover popups are positioned near the displayed cursor, including after scrolling.
+They may overlap neighboring splits when space is limited.
+
 ```lua
 vim.keymap.set('n', '<leader>th', '<cmd>CommentTranslateHover<CR>', { silent = true })
 ```
