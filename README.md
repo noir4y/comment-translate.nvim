@@ -86,6 +86,9 @@ If you already manage parsers through `nvim-treesitter`, you can keep doing so.
 
 ### Hover Translation
 
+Hover popups are positioned near the displayed cursor, including after scrolling.
+They may overlap neighboring splits when space is limited.
+
 ```lua
 vim.keymap.set('n', '<leader>th', '<cmd>CommentTranslateHover<CR>', { silent = true })
 ```
@@ -103,7 +106,9 @@ vim.keymap.set('n', '<leader>th', '<cmd>CommentTranslateHover<CR>', { silent = t
 ```
 
 Characterwise (`v`), linewise (`V`), and Visual Block (`Ctrl-V`) selections are
-supported. A block sends only the selected rectangle in one translation request.
+supported. Characterwise selections preserve UTF-8 character boundaries and
+respect the `selection` option (`inclusive`, `exclusive`, or `old`).
+A block sends only the selected rectangle in one translation request.
 Result lines replace the selected portions from top to bottom, preserving the
 text on either side. If the result has fewer lines, the remaining selected
 portions are removed; additional lines are inserted after the selected rows,

@@ -65,33 +65,18 @@ function M.show(text, opts)
 
   local height = math.min(#lines, max_height)
 
-  local cursor = vim.api.nvim_win_get_cursor(0)
-  local win_height = vim.api.nvim_win_get_height(0)
-  local win_width = vim.api.nvim_win_get_width(0)
-
-  local col = math.min(cursor[2] + 2, win_width - width - 1)
-  local row = cursor[1]
-
-  if row + height + 1 > win_height then
-    row = row - height - 1
-    if row < 0 then
-      row = 0
-    end
-  else
-    row = row + 1
-  end
-
-  hover_winid = vim.api.nvim_open_win(hover_bufnr, false, {
-    relative = 'win',
-    row = row,
-    col = col,
-    width = width,
-    height = height,
-    style = 'minimal',
+  local popup_opts = vim.lsp.util.make_floating_popup_options(width, height, {
+    relative = 'cursor',
+    anchor_bias = 'below',
+    offset_x = 2,
     border = opts.border or 'rounded',
     focusable = true,
     zindex = 50,
   })
+  -- The standard helper can return zero height for a very short split.
+  popup_opts.width = math.max(1, popup_opts.width)
+  popup_opts.height = math.max(1, popup_opts.height)
+  hover_winid = vim.api.nvim_open_win(hover_bufnr, false, popup_opts)
 
   vim.wo[hover_winid].wrap = true
   vim.wo[hover_winid].number = false
