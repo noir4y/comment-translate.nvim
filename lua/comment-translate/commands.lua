@@ -1,5 +1,6 @@
 local M = {}
 
+local buffer_revision = require('comment-translate.buffer_revision')
 local config = require('comment-translate.config')
 local parser = require('comment-translate.parser')
 local translate = require('comment-translate.translate')
@@ -261,7 +262,7 @@ function M.update_immersive(bufnr)
   end
 
   local token = bump_token(state)
-  local changedtick = vim.api.nvim_buf_get_changedtick(bufnr)
+  local same_revision = buffer_revision.capture(bufnr)
   ui.virtual_text.clear_buf(bufnr)
 
   local comments = parser.get_all_comments(bufnr)
@@ -287,9 +288,10 @@ function M.update_immersive(bufnr)
   local index = 1
 
   local function is_current()
-    return token == state.token
+    return immersive_state[bufnr] == state
+      and token == state.token
       and vim.api.nvim_buf_is_valid(bufnr)
-      and vim.api.nvim_buf_get_changedtick(bufnr) == changedtick
+      and same_revision()
   end
 
   local function process_next()

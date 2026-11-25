@@ -1,5 +1,7 @@
 local M = {}
 
+local buffer_revision = require('comment-translate.buffer_revision')
+
 local hover_bufnr = nil
 local hover_winid = nil
 
@@ -11,7 +13,7 @@ function M.begin_manual_request()
   local generation = manual_generation
   local winid = vim.api.nvim_get_current_win()
   local bufnr = vim.api.nvim_get_current_buf()
-  local tick = vim.api.nvim_buf_get_changedtick(bufnr)
+  local same_revision = buffer_revision.capture(bufnr)
   local cursor = vim.api.nvim_win_get_cursor(winid)
   return function()
     return generation == manual_generation
@@ -19,7 +21,7 @@ function M.begin_manual_request()
       and vim.api.nvim_buf_is_valid(bufnr)
       and vim.api.nvim_get_current_win() == winid
       and vim.api.nvim_get_current_buf() == bufnr
-      and vim.api.nvim_buf_get_changedtick(bufnr) == tick
+      and same_revision()
       and vim.deep_equal(vim.api.nvim_win_get_cursor(winid), cursor)
   end
 end

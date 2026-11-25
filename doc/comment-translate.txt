@@ -274,15 +274,20 @@ indented to the block's left edge; subsequent existing rows are preserved.
 Tabs and wide characters crossing a block boundary follow Neovim's native block
 semantics: unselected cells are retained as spaces. One u undoes all block changes.
 
-Async translation results are discarded when their source context is stale.
-Manual hover requires the original window, buffer, cursor position, and unchanged
-buffer contents; a newer manual attempt supersedes an older one. Disabling auto
-hover cancels pending timers and suppresses their late results, but does not abort
-HTTP requests already sent. Manual hover remains available with auto hover off.
-Immersive translation stops the pending batch if the buffer changes. Refresh by
-saving, re-entering the buffer, or running `:CommentTranslateUpdate`; editing alone
-does not start new requests. Already displayed inline translations remain until
-refreshed or immersive mode is disabled.
+Manual hover requires the original window, buffer, and cursor position. A text
+edit, buffer reload, or newer manual attempt invalidates the pending result.
+Saving without changing the buffer text preserves it.
+
+Turning off auto hover with |:CommentTranslateHoverToggle| cancels pending
+timers and suppresses their late results. HTTP requests already sent can still
+finish. Manual hover remains available with auto hover off.
+
+Editing or reloading the buffer stops the pending immersive batch. A normal
+save, re-entering the buffer, or running |:CommentTranslateUpdate| refreshes
+immersive translation. :noautocmd write preserves the pending batch if the
+buffer text stays the same. Editing alone does not start new requests. Already
+displayed inline translations remain until refreshed or immersive mode is
+disabled.
 
 PARSING AND TARGETS                              *comment-translate-parsing*
 

@@ -216,8 +216,14 @@ function M.setup_immersive(commands, ui)
   vim.api.nvim_create_autocmd('BufWipeout', {
     group = immersive_group,
     callback = function(args)
-      ui.virtual_text.clear_buf(args.buf)
-      commands.cleanup_buffer(args.buf)
+      local bufnr = args.buf
+      -- Renaming a buffer also emits BufWipeout, including on its first save.
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(bufnr) then
+          ui.virtual_text.clear_buf(bufnr)
+          commands.cleanup_buffer(bufnr)
+        end
+      end)
     end,
   })
 end
