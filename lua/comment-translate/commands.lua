@@ -1,5 +1,6 @@
 local M = {}
 
+local buffer_revision = require('comment-translate.buffer_revision')
 local config = require('comment-translate.config')
 local parser = require('comment-translate.parser')
 local translate = require('comment-translate.translate')
@@ -71,6 +72,7 @@ function M.cleanup_buffer(bufnr)
 end
 
 function M.hover_translate()
+  local is_current = ui.hover.begin_manual_request()
   local text, _ = parser.get_text_at_cursor()
   if not text then
     ui.hover.close()
@@ -79,6 +81,9 @@ function M.hover_translate()
   end
 
   translate.translate(text, nil, nil, function(result)
+    if not is_current() then
+      return
+    end
     if result then
       ui.hover.show(result)
     else
@@ -97,6 +102,7 @@ function M.toggle_auto_hover()
   if config.config.hover.auto then
     vim.notify('Auto hover enabled', vim.log.levels.INFO)
   else
+    require('comment-translate.autocmds').cleanup_all_timers()
     ui.hover.close()
     vim.notify('Auto hover disabled', vim.log.levels.INFO)
   end
@@ -256,6 +262,7 @@ function M.update_immersive(bufnr)
   end
 
   local token = bump_token(state)
+  local same_revision = buffer_revision.capture(bufnr)
   ui.virtual_text.clear_buf(bufnr)
 
   local comments = parser.get_all_comments(bufnr)
@@ -280,8 +287,15 @@ function M.update_immersive(bufnr)
 
   local index = 1
 
+  local function is_current()
+    return immersive_state[bufnr] == state
+      and token == state.token
+      and vim.api.nvim_buf_is_valid(bufnr)
+      and same_revision()
+  end
+
   local function process_next()
-    if token ~= state.token then
+    if not is_current() then
       return
     end
 
@@ -291,11 +305,7 @@ function M.update_immersive(bufnr)
     end
 
     translate.translate(item.text, nil, nil, function(result)
-      if token ~= state.token then
-        return
-      end
-
-      if not vim.api.nvim_buf_is_valid(bufnr) then
+      if not is_current() then
         return
       end
 

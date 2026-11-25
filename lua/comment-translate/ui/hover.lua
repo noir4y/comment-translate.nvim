@@ -1,7 +1,30 @@
 local M = {}
 
+local buffer_revision = require('comment-translate.buffer_revision')
+
 local hover_bufnr = nil
 local hover_winid = nil
+
+local manual_generation = 0
+
+-- Both manual entry points share one generation and source context.
+function M.begin_manual_request()
+  manual_generation = manual_generation + 1
+  local generation = manual_generation
+  local winid = vim.api.nvim_get_current_win()
+  local bufnr = vim.api.nvim_get_current_buf()
+  local same_revision = buffer_revision.capture(bufnr)
+  local cursor = vim.api.nvim_win_get_cursor(winid)
+  return function()
+    return generation == manual_generation
+      and vim.api.nvim_win_is_valid(winid)
+      and vim.api.nvim_buf_is_valid(bufnr)
+      and vim.api.nvim_get_current_win() == winid
+      and vim.api.nvim_get_current_buf() == bufnr
+      and same_revision()
+      and vim.deep_equal(vim.api.nvim_win_get_cursor(winid), cursor)
+  end
+end
 
 function M.bufnr()
   return hover_bufnr

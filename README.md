@@ -119,6 +119,21 @@ indented to the block's left edge. Tabs and wide characters that cross a block
 boundary use Neovim's native block semantics: the unselected cells are retained
 as spaces. All block changes can be undone together with one `u`.
 
+Manual hover requires the original window, buffer, and cursor position. A text
+edit, buffer reload, or newer manual attempt invalidates the pending result.
+Saving without changing the buffer text preserves it.
+
+Turning off auto hover with `:CommentTranslateHoverToggle` cancels pending timers
+and suppresses their late results. HTTP requests already sent can still finish.
+Manual hover remains available with auto hover off.
+
+Editing or reloading the buffer stops the pending immersive batch. A normal
+save, re-entering the buffer, or running `:CommentTranslateUpdate` refreshes
+immersive translation. `:noautocmd write` preserves the pending batch if the
+buffer text stays the same. Editing alone does not start new requests. Already
+displayed inline translations remain until refreshed or immersive mode is
+disabled.
+
 ### Translation Targets and Parsing
 
 Hover detection uses `targets.comment` and `targets.string`. Immersive mode

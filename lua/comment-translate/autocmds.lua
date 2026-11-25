@@ -87,14 +87,23 @@ function M.setup_hover(config, parser, translate, ui)
       timer:start(config.config.hover.delay, 0, function()
         vim.schedule(function()
           local ok = pcall(function()
-            if hover_timers[bufnr] == timer then
+            if
+              config.config.hover.enabled
+              and config.config.hover.auto
+              and hover_timers[bufnr] == timer
+            then
               if is_hover_context(ui) then
                 return
               end
               local text, _ = parser.get_text_at_cursor()
               if text then
                 translate.translate(text, nil, nil, function(result)
-                  if result and hover_timers[bufnr] == timer then
+                  if
+                    result
+                    and config.config.hover.enabled
+                    and config.config.hover.auto
+                    and hover_timers[bufnr] == timer
+                  then
                     ui.hover.show(result)
                   end
                 end)
@@ -207,8 +216,14 @@ function M.setup_immersive(commands, ui)
   vim.api.nvim_create_autocmd('BufWipeout', {
     group = immersive_group,
     callback = function(args)
-      ui.virtual_text.clear_buf(args.buf)
-      commands.cleanup_buffer(args.buf)
+      local bufnr = args.buf
+      -- Renaming a buffer also emits BufWipeout, including on its first save.
+      vim.schedule(function()
+        if not vim.api.nvim_buf_is_valid(bufnr) then
+          ui.virtual_text.clear_buf(bufnr)
+          commands.cleanup_buffer(bufnr)
+        end
+      end)
     end,
   })
 end
@@ -226,6 +241,7 @@ function M.show_hover_on_demand()
     return
   end
 
+  local is_current = refs.ui.hover.begin_manual_request()
   local text, _ = refs.parser.get_text_at_cursor()
   if not text then
     vim.notify('No comment or string found', vim.log.levels.INFO)
@@ -233,6 +249,9 @@ function M.show_hover_on_demand()
   end
 
   refs.translate.translate(text, nil, nil, function(result)
+    if not is_current() then
+      return
+    end
     if result then
       refs.ui.hover.show(result)
     else
