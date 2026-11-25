@@ -142,7 +142,12 @@ describe('parser target request boundary', function()
       end,
     }
     ui = {
-      hover = { close = function() end, show = function() end, bufnr = function() end },
+      hover = {
+        close = function() end,
+        show = function() end,
+        bufnr = function() end,
+        begin_manual_request = require('comment-translate.ui.hover').begin_manual_request,
+      },
       virtual_text = {
         clear_buf = function() end,
         clear_all = function() end,

@@ -280,6 +280,36 @@ describe('timer_cleanup', function()
     end
   end)
 
+  for _, started in ipairs({ false, true }) do
+    it('invalidates automatic hover on OFF, started=' .. tostring(started), function()
+      package.loaded['comment-translate.config'] = config
+      package.loaded['comment-translate.ui'] = ui
+      package.loaded['comment-translate.commands'] = nil
+      local commands = require('comment-translate.commands')
+      trigger_autocmd('CursorHold')
+      if started then
+        trigger_timer(timers[1])
+      end
+      commands.toggle_auto_hover()
+      trigger_timer(timers[1])
+      if started then
+        reply_translate(1, 'old')
+      end
+      assert.equals(started and 1 or 0, #translate_requests)
+      assert.same({}, hover_state.shown)
+      commands.toggle_auto_hover()
+      trigger_timer(timers[1])
+      if started then
+        reply_translate(1, 'old')
+      end
+      assert.same({}, hover_state.shown)
+      trigger_autocmd('CursorHold')
+      trigger_timer(timers[2])
+      reply_translate(started and 2 or 1, 'new')
+      assert.same({ 'new' }, hover_state.shown)
+    end)
+  end
+
   it('automatically translates and shows hover on CursorHold', function()
     set_source_position(POS.comment_a)
     trigger_autocmd('CursorHold')
